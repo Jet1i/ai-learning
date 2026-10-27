@@ -1,0 +1,352 @@
+<title>梯度下降与反向传播</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* 布局:单列讲义,两个演示面板,图在上、说明在下 */
+:root {
+  --bg: #f6f7f4;
+  --panel: #ffffff;
+  --ink: #1d2421;
+  --muted: #5d6863;
+  --line: #d9ddd8;
+  --fwd: #2357c9;      /* 前向:数值 */
+  --fwd-soft: #e4ebfa;
+  --grad: #d0491c;     /* 反向:梯度 */
+  --grad-soft: #fbe6dc;
+  --ok: #23845a;
+  --warn: #b7791f;
+  --bad: #c0352b;
+  --font-display: "Noto Serif SC", "Songti SC", serif;
+  --font-body: "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141816; --panel: #1c211f; --ink: #e8ece9; --muted: #9aa6a0; --line: #333b37;
+    --fwd: #7ea4f5; --fwd-soft: #22304f; --grad: #f08a5d; --grad-soft: #4a2a1d;
+    --ok: #5cc08f; --warn: #e2b04f; --bad: #f07368; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141816; --panel: #1c211f; --ink: #e8ece9; --muted: #9aa6a0; --line: #333b37;
+  --fwd: #7ea4f5; --fwd-soft: #22304f; --grad: #f08a5d; --grad-soft: #4a2a1d;
+  --ok: #5cc08f; --warn: #e2b04f; --bad: #f07368; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.7;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+main { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+header h1 { font-family: var(--font-display); font-weight: 900; font-size: clamp(28px, 5vw, 40px); line-height: 1.2; margin: 0 0 8px; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); max-width: 62ch; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.legend .f::before { background: var(--fwd); }
+.legend .g::before { background: var(--grad); }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.eyebrow { font-size: 12px; letter-spacing: .12em; color: var(--muted); font-weight: 700; }
+h2 { font-family: var(--font-display); font-weight: 600; font-size: 22px; margin: 0; }
+.lead { margin: 0; color: var(--muted); max-width: 62ch; }
+.chart-wrap { overflow-x: auto; }
+svg { display: block; width: 100%; height: auto; }
+#gd-svg { min-width: 560px; }
+#bp-svg { min-width: 680px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button {
+  font: 500 14px var(--font-body); color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--fwd); outline-offset: 2px; }
+button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+button[aria-pressed="true"] { background: var(--fwd-soft); border-color: var(--fwd); color: var(--fwd); }
+button:disabled { opacity: .4; cursor: default; }
+.lr-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.lr-row label { font-size: 14px; color: var(--muted); }
+input[type=range] { flex: 1 1 180px; accent-color: var(--fwd); }
+.stats { display: flex; flex-wrap: wrap; gap: 8px 24px; font-family: var(--font-mono); font-size: 14px; font-variant-numeric: tabular-nums; }
+.stats b { font-weight: 600; }
+.chip { display: inline-block; font: 700 13px var(--font-body); padding: 2px 10px; border-radius: 999px; border: 1px solid currentColor; }
+.chip.ok { color: var(--ok); } .chip.warn { color: var(--warn); } .chip.bad { color: var(--bad); }
+.explain { background: var(--bg); border-radius: 8px; padding: 14px 16px; min-height: 5.4em; }
+.explain p { margin: 0; }
+.explain code, .lead code, .note code { font-family: var(--font-mono); font-size: 13px; }
+.formula { font-family: var(--font-mono); font-size: 14px; margin-top: 6px !important; }
+.phase { font-weight: 700; }
+.phase.f { color: var(--fwd); } .phase.g { color: var(--grad); }
+.note { font-size: 14px; color: var(--muted); margin: 0; }
+.ax { stroke: var(--line); stroke-width: 1; }
+.tick { fill: var(--muted); font: 11px var(--font-mono); }
+.node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; transition: stroke .3s, fill .3s; }
+.node.data rect { stroke-dasharray: 4 3; }
+.node.active rect { stroke: var(--ink); stroke-width: 2.5; }
+.node .name { fill: var(--ink); font: 700 15px var(--font-mono); text-anchor: middle; }
+.node .val { fill: var(--fwd); font: 600 13px var(--font-mono); text-anchor: middle; opacity: 0; transition: opacity .4s; }
+.node .grd { fill: var(--grad); font: 600 13px var(--font-mono); text-anchor: middle; opacity: 0; transition: opacity .4s; }
+.node .val.on, .node .grd.on { opacity: 1; }
+.edge { stroke: var(--line); stroke-width: 2; fill: none; transition: stroke .3s; }
+.edge.fwd { stroke: var(--fwd); }
+.edge.grad { stroke: var(--grad); }
+@keyframes flow { to { stroke-dashoffset: -20; } }
+.edge.flowing { stroke-dasharray: 6 4; animation: flow .6s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .edge.flowing { animation: none; } * { transition: none !important; } }
+</style>
+
+<main>
+  <header>
+    <h1>神经网络怎么学习</h1>
+    <p>第 2 周配套动画。上半部分看梯度下降怎么一步步把参数调对,学习率如何决定成败;下半部分看反向传播怎么从 loss 出发,把梯度倒着传回每个参数。</p>
+    <div class="legend"><span class="f">蓝色:前向算出的数值</span><span class="g">橙色:反向传回的梯度</span></div>
+  </header>
+
+  <section aria-labelledby="gd-title">
+    <div class="eyebrow">演示 1 · 对应 gd1.py</div>
+    <h2 id="gd-title">梯度下降:小球滚向谷底</h2>
+    <p class="lead">为了画在平面上,这里把 b 固定为 1,只学 w。曲线是 loss 随 w 的变化,谷底在 w = 2。每一步:看脚下的坡度(梯度),往下坡方向走 <code>lr × 梯度</code> 那么远。</p>
+    <div class="chart-wrap"><svg id="gd-svg" viewBox="0 0 720 320" role="img" aria-label="loss 曲线与梯度下降轨迹"></svg></div>
+    <div class="lr-row">
+      <label for="lr-range">学习率 lr</label>
+      <input id="lr-range" type="range" min="0.001" max="0.45" step="0.001" value="0.05">
+      <div class="controls" id="lr-presets">
+        <button data-lr="0.001">0.001</button>
+        <button data-lr="0.05">0.05</button>
+        <button data-lr="0.3">0.3</button>
+        <button data-lr="0.4">0.4</button>
+      </div>
+    </div>
+    <div class="controls">
+      <button class="primary" id="gd-play">播放</button>
+      <button id="gd-step">走一步</button>
+      <button id="gd-reset">重置</button>
+    </div>
+    <div class="stats" aria-live="polite">
+      <span>lr = <b id="s-lr">0.050</b></span>
+      <span>step = <b id="s-step">0</b></span>
+      <span>w = <b id="s-w">0.000</b></span>
+      <span>loss = <b id="s-loss">12.667</b></span>
+      <span id="s-chip" class="chip ok">平稳收敛</span>
+    </div>
+    <p class="note" id="gd-note"></p>
+  </section>
+
+  <section aria-labelledby="bp-title">
+    <div class="eyebrow">演示 2 · 对应 autograd.py</div>
+    <h2 id="bp-title">反向传播:梯度倒着流</h2>
+    <p class="lead">一条数据 x = 2,正确答案 y = 5,当前参数 w = 0.5,b = 0.2。先前向算出 loss,再从 loss 出发反向传梯度。每个节点只做一件小事:按自己的局部规则把梯度分给输入。</p>
+    <div class="chart-wrap"><svg id="bp-svg" viewBox="0 0 760 380" role="img" aria-label="计算图"></svg></div>
+    <div class="controls">
+      <button class="primary" id="bp-play">自动播放</button>
+      <button id="bp-prev">上一步</button>
+      <button id="bp-next">下一步</button>
+      <button id="bp-reset">重置</button>
+      <span class="note" id="bp-count"></span>
+    </div>
+    <div class="explain" aria-live="polite" id="bp-explain"></div>
+  </section>
+</main>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs, parent, text) => {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+};
+
+/* ---------- 演示 1:梯度下降 ---------- */
+// 数据 x = -2..3, y = 2x+1, b 固定为 1 → loss(w) = K (w-2)^2, K = mean(x^2) = 19/6
+const K = 19 / 6;
+const loss = w => K * (w - 2) ** 2;
+const grad = w => 2 * K * (w - 2);
+const svg1 = document.getElementById("gd-svg");
+const W0 = -2, W1 = 6, L1 = 55;
+const X0 = 50, X1 = 700, Y0 = 290, Y1 = 20;
+const sx = w => X0 + (w - W0) / (W1 - W0) * (X1 - X0);
+const sy = l => Y0 - Math.min(l, L1) / L1 * (Y0 - Y1);
+
+el("line", { x1: X0, y1: Y0, x2: X1, y2: Y0, class: "ax" }, svg1);
+el("line", { x1: X0, y1: Y0, x2: X0, y2: Y1, class: "ax" }, svg1);
+for (let w = -2; w <= 6; w += 1) {
+  el("text", { x: sx(w), y: Y0 + 18, class: "tick", "text-anchor": "middle" }, svg1, w);
+}
+for (const l of [0, 25, 50]) {
+  el("text", { x: X0 - 8, y: sy(l) + 4, class: "tick", "text-anchor": "end" }, svg1, l);
+}
+el("text", { x: X1, y: Y0 - 8, class: "tick", "text-anchor": "end" }, svg1, "w →");
+el("text", { x: X0 + 6, y: Y1 + 4, class: "tick" }, svg1, "loss");
+let d = "";
+for (let i = 0; i <= 200; i++) {
+  const w = W0 + (W1 - W0) * i / 200;
+  d += (i ? "L" : "M") + sx(w).toFixed(1) + " " + sy(loss(w)).toFixed(1);
+}
+el("path", { d, fill: "none", stroke: "var(--muted)", "stroke-width": 2 }, svg1);
+el("line", { x1: sx(2), y1: Y0, x2: sx(2), y2: Y0 - 6, stroke: "var(--ok)", "stroke-width": 2 }, svg1);
+const trail = el("polyline", { fill: "none", stroke: "var(--fwd)", "stroke-width": 1.5, "stroke-opacity": .7 }, svg1);
+const tangent = el("line", { stroke: "var(--grad)", "stroke-width": 2.5 }, svg1);
+const ball = el("circle", { r: 8, fill: "var(--fwd)", stroke: "var(--panel)", "stroke-width": 2 }, svg1);
+const offMsg = el("text", { x: 375, y: 60, "text-anchor": "middle", fill: "var(--bad)", style: "font: 700 16px var(--font-body)" }, svg1, "");
+
+let lr = 0.05, w = 0, step = 0, pts = [], timer = null;
+const $ = id => document.getElementById(id);
+
+function regime() {
+  const r = 1 - lr * 2 * K;            // 每步 (w-2) 被乘以 r
+  if (Math.abs(r) > 1) return ["bad", "发散", `每走一步,离谷底的距离变成原来的 ${Math.abs(r).toFixed(2)} 倍(大于 1),所以越跳越远,loss 爆炸。`];
+  if (r < 0) return ["warn", "震荡", `步子太大,每步都跨过谷底跳到另一边,距离变成原来的 ${Math.abs(r).toFixed(2)} 倍。小于 1 所以最终会收敛,但要来回晃很久。`];
+  if (r > 0.97) return ["warn", "太慢", `每步只缩短 ${((1 - r) * 100).toFixed(1)}% 的距离,方向是对的,但要很多很多步才能到谷底。`];
+  return ["ok", "平稳收敛", `每步把离谷底的距离缩短到原来的 ${r.toFixed(2)} 倍,稳稳地滑下去。`];
+}
+
+function draw() {
+  const inView = w >= W0 && w <= W1 && loss(w) <= L1;
+  const cx = Math.max(X0, Math.min(X1, sx(w))), cy = sy(loss(w));
+  ball.setAttribute("cx", cx); ball.setAttribute("cy", cy);
+  ball.setAttribute("fill", inView ? "var(--fwd)" : "var(--bad)");
+  trail.setAttribute("points", pts.map(p => `${Math.max(X0, Math.min(X1, sx(p))).toFixed(1)},${sy(loss(p)).toFixed(1)}`).join(" "));
+  // 切线:表示当前的坡度(梯度)
+  if (inView) {
+    const g = grad(w), dw = 0.6;
+    tangent.setAttribute("x1", sx(w - dw)); tangent.setAttribute("y1", sy(loss(w) - g * dw));
+    tangent.setAttribute("x2", sx(w + dw)); tangent.setAttribute("y2", sy(loss(w) + g * dw));
+    tangent.style.display = "";
+  } else tangent.style.display = "none";
+  offMsg.textContent = inView ? "" : "小球飞出画面了:发散!";
+  $("s-lr").textContent = lr.toFixed(3);
+  $("s-step").textContent = step;
+  $("s-w").textContent = Math.abs(w) > 1e6 ? w.toExponential(2) : w.toFixed(3);
+  const L = loss(w);
+  $("s-loss").textContent = L > 1e6 ? L.toExponential(2) : L.toFixed(3);
+  const [cls, label, note] = regime();
+  const chip = $("s-chip"); chip.className = "chip " + cls; chip.textContent = label;
+  $("gd-note").textContent = note + "  橙色短线是当前的坡度,坡越陡,这一步走得越远。";
+  document.querySelectorAll("#lr-presets button").forEach(b => b.setAttribute("aria-pressed", Math.abs(+b.dataset.lr - lr) < 1e-9));
+}
+
+function doStep() {
+  if (!isFinite(w) || Math.abs(w) > 1e30) return false;
+  w = w - lr * grad(w); step++; pts.push(w);
+  if (pts.length > 400) pts.shift();
+  draw();
+  return step < 300 && !(Math.abs(w - 2) < 1e-4) && Math.abs(w) < 1e30;
+}
+function stop() { clearInterval(timer); timer = null; $("gd-play").textContent = "播放"; }
+function reset() { stop(); w = 0; step = 0; pts = [0]; draw(); }
+$("gd-play").onclick = () => {
+  if (timer) return stop();
+  $("gd-play").textContent = "暂停";
+  timer = setInterval(() => { if (!doStep()) stop(); }, lr < 0.01 ? 40 : 220);
+};
+$("gd-step").onclick = () => { stop(); doStep(); };
+$("gd-reset").onclick = reset;
+$("lr-range").oninput = e => { lr = +e.target.value; reset(); };
+document.querySelectorAll("#lr-presets button").forEach(b => b.onclick = () => {
+  lr = +b.dataset.lr; $("lr-range").value = lr; reset();
+});
+reset();
+
+/* ---------- 演示 2:反向传播 ---------- */
+const svg2 = document.getElementById("bp-svg");
+const NODES = {
+  x:    { x: 70,  y: 50,  label: "x",       val: 2,     grad: null,  data: true },
+  w:    { x: 70,  y: 140, label: "w",       val: 0.5,   grad: -15.2 },
+  b:    { x: 70,  y: 230, label: "b",       val: 0.2,   grad: -7.6 },
+  y:    { x: 70,  y: 325, label: "y",       val: 5,     grad: null,  data: true },
+  mul:  { x: 230, y: 95,  label: "w·x",     val: 1.0,   grad: -7.6 },
+  add:  { x: 390, y: 160, label: "pred",    val: 1.2,   grad: -7.6 },
+  sub:  { x: 540, y: 220, label: "err",     val: -3.8,  grad: -7.6 },
+  sq:   { x: 690, y: 220, label: "loss",    val: 14.44, grad: 1 },
+};
+const EDGES = [["x","mul"],["w","mul"],["mul","add"],["b","add"],["add","sub"],["y","sub"],["sub","sq"]];
+const edgeEls = {};
+for (const [a, b] of EDGES) {
+  const A = NODES[a], B = NODES[b];
+  const x1 = A.x + 48, x2 = B.x - 48, mx = (x1 + x2) / 2;
+  edgeEls[a + ">" + b] = el("path", { d: `M${x1} ${A.y} C${mx} ${A.y}, ${mx} ${B.y}, ${x2} ${B.y}`, class: "edge" }, svg2);
+}
+for (const k in NODES) {
+  const n = NODES[k];
+  const g = el("g", { class: "node" + (n.data ? " data" : ""), transform: `translate(${n.x},${n.y})` }, svg2);
+  el("rect", { x: -48, y: -24, width: 96, height: 48, rx: 8 }, g);
+  el("text", { y: -30, class: "val" }, g, (n.data ? "" : "") + fmt(n.val));
+  el("text", { y: 5, class: "name" }, g, n.label);
+  el("text", { y: 44, class: "grd" }, g, n.grad === null ? "" : "∂ " + fmt(n.grad));
+  n.g = g;
+}
+el("text", { x: 22, y: 374, class: "tick" }, svg2, "虚线框 = 数据,不需要学");
+function fmt(v) { return Number.isInteger(v) ? String(v) : String(+v.toFixed(2)); }
+
+const STEPS = [
+  { phase: "f", node: "mul", edges: ["x>mul","w>mul"], val: ["x","w","mul","b","y"],
+    text: "前向第 1 步:乘法节点算 w·x = 0.5 × 2 = 1.0。每个节点都记住了自己的输入是谁,这正是 Value 里 _parents 做的事。" },
+  { phase: "f", node: "add", edges: ["mul>add","b>add"], val: ["add"],
+    text: "前向第 2 步:加法节点算 pred = w·x + b = 1.0 + 0.2 = 1.2。" },
+  { phase: "f", node: "sub", edges: ["add>sub","y>sub"], val: ["sub"],
+    text: "前向第 3 步:err = pred − y = 1.2 − 5 = −3.8。预测比答案小了 3.8。" },
+  { phase: "f", node: "sq", edges: ["sub>sq"], val: ["sq"],
+    text: "前向第 4 步:loss = err² = 14.44。前向结束,接下来从 loss 出发倒着走。" },
+  { phase: "g", node: "sq", edges: [], grad: ["sq"],
+    text: "反向起点:∂loss/∂loss = 1。这就是 backward() 里那句 self.grad = 1.0。",
+    formula: "loss.grad = 1" },
+  { phase: "g", node: "sub", edges: ["sub>sq"], grad: ["sub"],
+    text: "平方节点的局部规则:(err²)' = 2·err。把收到的梯度 1 乘上它,传给 err。",
+    formula: "err.grad = 2 × (−3.8) × 1 = −7.6" },
+  { phase: "g", node: "add", edges: ["add>sub"], grad: ["add"],
+    text: "减法节点 err = pred − y:对 pred 的局部导数是 1,所以梯度原样传下去。y 是数据,不用管它的梯度。",
+    formula: "pred.grad = 1 × (−7.6) = −7.6" },
+  { phase: "g", node: "mul", edges: ["mul>add","b>add"], grad: ["mul","b"],
+    text: "加法节点:梯度原样复制给两个输入。b 拿到了它的梯度 −7.6,和第 1 课手推的 2·err 完全一样。",
+    formula: "b.grad = −7.6     (w·x).grad = −7.6" },
+  { phase: "g", node: "w", edges: ["w>mul"], grad: ["w"],
+    text: "乘法节点:传给 w 的梯度要乘上“对方” x 的值。w 的梯度是 −15.2,等于第 1 课手推的 2·err·x。负数表示把 w 调大能让 loss 变小。",
+    formula: "w.grad = x × (−7.6) = 2 × (−7.6) = −15.2" },
+  { phase: "u", node: null, edges: [], grad: [],
+    text: "最后一步:用梯度更新参数(lr = 0.05)。w 和 b 都变大了一点,下次 pred 会更接近 5。整套流程就是:前向 → 反向 → 更新,重复上万次。",
+    formula: "w ← 0.5 − 0.05 × (−15.2) = 1.26     b ← 0.2 − 0.05 × (−7.6) = 0.58" },
+];
+let cur = -1, bpTimer = null;
+
+function renderBP() {
+  for (const k in NODES) {
+    const g = NODES[k].g;
+    g.classList.remove("active");
+    g.querySelector(".val").classList.remove("on");
+    g.querySelector(".grd").classList.remove("on");
+  }
+  for (const k in edgeEls) edgeEls[k].setAttribute("class", "edge");
+  for (let i = 0; i <= cur; i++) {
+    const s = STEPS[i];
+    (s.val || []).forEach(k => NODES[k].g.querySelector(".val").classList.add("on"));
+    (s.grad || []).forEach(k => NODES[k].g.querySelector(".grd").classList.add("on"));
+    s.edges.forEach(e => edgeEls[e].setAttribute("class", "edge " + (s.phase === "f" ? "fwd" : "grad") + (i === cur ? " flowing" : "")));
+  }
+  const ex = $("bp-explain");
+  if (cur < 0) {
+    ex.innerHTML = '<p>点“下一步”或“自动播放”。先看蓝色的前向,再看橙色的反向。</p>';
+  } else {
+    const s = STEPS[cur];
+    if (s.node) NODES[s.node].g.classList.add("active");
+    const tag = s.phase === "f" ? '<span class="phase f">前向</span>' : s.phase === "g" ? '<span class="phase g">反向</span>' : '<span class="phase">更新</span>';
+    ex.innerHTML = `<p>${tag} · ${s.text}</p>` + (s.formula ? `<p class="formula">${s.formula}</p>` : "");
+  }
+  $("bp-count").textContent = `${cur + 1} / ${STEPS.length}`;
+  $("bp-prev").disabled = cur < 0;
+  $("bp-next").disabled = cur >= STEPS.length - 1;
+}
+function bpStop() { clearInterval(bpTimer); bpTimer = null; $("bp-play").textContent = "自动播放"; }
+$("bp-next").onclick = () => { bpStop(); if (cur < STEPS.length - 1) cur++; renderBP(); };
+$("bp-prev").onclick = () => { bpStop(); if (cur >= 0) cur--; renderBP(); };
+$("bp-reset").onclick = () => { bpStop(); cur = -1; renderBP(); };
+$("bp-play").onclick = () => {
+  if (bpTimer) return bpStop();
+  if (cur >= STEPS.length - 1) cur = -1;
+  $("bp-play").textContent = "暂停";
+  cur++; renderBP();
+  bpTimer = setInterval(() => { if (cur >= STEPS.length - 1) return bpStop(); cur++; renderBP(); }, 2600);
+};
+renderBP();
+</script>
