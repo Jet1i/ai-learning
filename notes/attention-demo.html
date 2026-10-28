@@ -1,0 +1,154 @@
+<title>自注意力演示</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one column lab bench — word graph on top, numbers tray below, controls in a strip */
+:root{
+  --bg:#f3f5f2; --panel:#ffffff; --fg:#1d2420; --muted:#66716a; --line:#d6ddd8;
+  --q:#2f6fd6; --k:#c2571a; --v:#2b8a57; --accent:#2f6fd6;
+  --display:"Noto Serif SC",serif; --body:"Noto Sans SC",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141917; --panel:#1c2320; --fg:#e6ece8; --muted:#94a19a; --line:#2f3934;
+  --q:#6fa3ff; --k:#f08a4b; --v:#5cc98d; --accent:#6fa3ff; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --panel:#1c2320; --fg:#e6ece8; --muted:#94a19a; --line:#2f3934;
+  --q:#6fa3ff; --k:#f08a4b; --v:#5cc98d; --accent:#6fa3ff; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.6}
+.wrap{max-width:860px;margin:0 auto;padding-block:28px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:20px}
+h1{font-family:var(--display);font-weight:900;font-size:2rem;margin:0;text-wrap:balance}
+.lede{margin:0;color:var(--muted);max-width:62ch}
+.formula{font-family:var(--mono);font-size:.95rem;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;overflow-x:auto;white-space:nowrap}
+.formula .q{color:var(--q)} .formula .k{color:var(--k)} .formula .v{color:var(--v)}
+.steps{display:flex;gap:8px;flex-wrap:wrap}
+.steps button{font:inherit;font-size:.9rem;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:999px;padding:6px 14px;cursor:pointer}
+.steps button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;overflow-x:auto}
+svg{display:block;width:100%;min-width:520px;height:auto}
+.explain{margin:0;min-height:3.2em;max-width:65ch}
+.tray{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.tray>div{min-width:0}
+.tray h3{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+table{border-collapse:collapse;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.85rem;width:100%}
+td,th{padding:4px 6px;text-align:right;border-bottom:1px solid var(--line)}
+th{font-family:var(--body);font-weight:500;color:var(--muted)}
+tr.sel td{color:var(--accent);font-weight:600}
+td.masked{color:var(--muted);text-decoration:line-through}
+.controls{display:flex;flex-wrap:wrap;gap:18px 28px;align-items:center}
+.controls label{display:flex;gap:8px;align-items:center;font-size:.92rem}
+.controls output{font-family:var(--mono);min-width:3ch}
+.play{font:inherit;font-weight:700;background:var(--fg);color:var(--bg);border:0;border-radius:8px;padding:8px 16px;cursor:pointer}
+.tip{font-size:.88rem;color:var(--muted);margin:0}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <h1>“吃”这个词在看谁？</h1>
+  <p class="lede">句子“我 爱 吃 苹果”里，每个词都用自己的 <b style="color:var(--q)">Query</b> 去和所有词的 <b style="color:var(--k)">Key</b> 比相似度，softmax 成权重，再按权重把大家的 <b style="color:var(--v)">Value</b> 加起来。数字和 <code>attention1.py</code> 跑出来的一样。</p>
+  <div class="formula">out = softmax( <span class="q">Q</span> · <span class="k">K</span>ᵀ / √d ) · <span class="v">V</span></div>
+
+  <div class="steps" role="group" aria-label="步骤">
+    <button id="s0" data-step="0">① 打分 Q·K</button>
+    <button id="s1" data-step="1">② softmax 成权重</button>
+    <button id="s2" data-step="2">③ 加权求和 V</button>
+  </div>
+
+  <div class="stage"><svg id="g" viewBox="0 0 640 300" aria-label="注意力连线图"></svg></div>
+  <p class="explain" id="explain"></p>
+
+  <div class="controls">
+    <button class="play" id="play">▶ 自动播放</button>
+    <label for="scale">分数放大 ×<output id="scaleOut">1</output>
+      <input id="scale" type="range" min="0.2" max="8" step="0.1" value="1"></label>
+    <label for="mask"><input id="mask" type="checkbox"> 因果遮罩（不准看后面的词）</label>
+  </div>
+  <p class="tip">点上面一排的词换“提问者”。把分数放大到 ×8（相当于去掉 √d 且维度很大），权重会挤到一个词上；缩小到 ×0.2，大家平分。</p>
+
+  <div class="tray">
+    <div><h3>分数矩阵 QKᵀ/√d</h3><table id="tScores"></table></div>
+    <div><h3>权重（每行和 = 1）</h3><table id="tW"></table></div>
+  </div>
+</div>
+
+<script>
+const words=["我","爱","吃","苹果"];
+const S=[[-2.14,-0.73,-1.29,-1.87],[-0.53,-0.2,-0.38,-0.15],[-2.15,-0.84,0.18,-1.12],[-2.71,-0.43,-0.75,-1.82]];
+let sel=2, step=0, timer=null;
+const $=id=>document.getElementById(id);
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function rowScores(i){
+  const k=+$("scale").value, m=$("mask").checked;
+  return S[i].map((s,j)=> (m&&j>i)? -Infinity : s*k);
+}
+function softmax(r){const mx=Math.max(...r.filter(isFinite));const e=r.map(x=>isFinite(x)?Math.exp(x-mx):0);const z=e.reduce((a,b)=>a+b,0);return e.map(x=>x/z);}
+
+const X=j=>110+j*140;
+function draw(){
+  const g=$("g"), q=css("--q"), kc=css("--k"), v=css("--v"), fg=css("--fg"), mu=css("--muted"), ln=css("--line"), pn=css("--panel");
+  const sc=rowScores(sel), w=softmax(sc);
+  let h="";
+  // edges
+  words.forEach((_,j)=>{
+    const masked=!isFinite(sc[j]);
+    const x1=X(sel),y1=62,x2=X(j),y2=222;
+    const width= step===0 ? 2 : 1+w[j]*22;
+    const col= masked? ln : step===2? v : (step===0? kc : q);
+    const op= masked? .5 : step===0? .55 : Math.max(.18,w[j]);
+    h+=`<path d="M${x1} ${y1} C ${x1} 150, ${x2} 130, ${x2} ${y2}" fill="none" stroke="${col}" stroke-width="${width}" stroke-linecap="round" opacity="${op}" style="transition:all .5s"/>`;
+    const lbl= masked? "遮住" : step===0? sc[j].toFixed(2) : (w[j]*100).toFixed(0)+"%";
+    const mx=(x1+x2)/2, my=150+(j-sel)*4;
+    h+=`<text x="${x2}" y="${y2-14}" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="14" font-weight="600" fill="${masked?mu:fg}">${lbl}</text>`;
+  });
+  // top: queries
+  words.forEach((t,j)=>{
+    const on=j===sel;
+    h+=`<g class="qw" data-j="${j}" style="cursor:pointer"><rect x="${X(j)-46}" y="18" width="92" height="40" rx="8" fill="${on?q:pn}" stroke="${q}" stroke-width="${on?0:1.5}"/>
+    <text x="${X(j)}" y="44" text-anchor="middle" font-size="17" font-weight="700" fill="${on?pn:q}">${t}</text></g>`;
+  });
+  // bottom: keys / values
+  words.forEach((t,j)=>{
+    const masked=!isFinite(sc[j]);
+    const c= step===2? v : kc;
+    h+=`<rect x="${X(j)-46}" y="222" width="92" height="40" rx="8" fill="${pn}" stroke="${masked?ln:c}" stroke-width="1.5"/>
+    <text x="${X(j)}" y="248" text-anchor="middle" font-size="17" font-weight="700" fill="${masked?mu:c}">${t}</text>`;
+  });
+  h+=`<text x="12" y="44" font-size="12" fill="${mu}">Query</text><text x="12" y="248" font-size="12" fill="${mu}">${step===2?"Value":"Key"}</text>`;
+  if(step===2){
+    h+=`<text x="320" y="290" text-anchor="middle" font-size="13" fill="${v}">新的“${words[sel]}” = ${w.map((p,j)=>p.toFixed(2)+"·V"+words[j]).join(" + ")}</text>`;
+  }
+  g.innerHTML=h;
+  g.querySelectorAll(".qw").forEach(el=>el.onclick=()=>{sel=+el.dataset.j;render();});
+
+  const ex=[
+    `“${words[sel]}”拿自己的 Query 和每个词的 Key 做点积，再除以 √d。分数越大，说明越“对上眼”。分数可以是负数，也不加起来等于 1。`,
+    `softmax 把这一行分数变成概率：先取 e 的指数（全变正数），再除以总和。最大的是“${words[w.indexOf(Math.max(...w))]}”，占 ${(Math.max(...w)*100).toFixed(0)}%。`,
+    `最后按权重把每个词的 Value 加起来，得到“${words[sel]}”的新向量。它还是 d 维，但已经混进了上下文的信息。线越粗，混得越多。`
+  ];
+  $("explain").textContent=ex[step];
+  document.querySelectorAll(".steps button").forEach(b=>b.setAttribute("aria-pressed",+b.dataset.step===step));
+}
+function tables(){
+  const head="<tr><th></th>"+words.map(w=>`<th>${w}</th>`).join("")+"</tr>";
+  let a=head,b=head;
+  words.forEach((t,i)=>{
+    const sc=rowScores(i), w=softmax(sc), c=i===sel?' class="sel"':'';
+    a+=`<tr${c}><th>${t}</th>`+sc.map(x=>isFinite(x)?`<td>${x.toFixed(2)}</td>`:`<td class="masked">−∞</td>`).join("")+"</tr>";
+    b+=`<tr${c}><th>${t}</th>`+w.map((x,j)=>`<td${!isFinite(sc[j])?' class="masked"':''}>${x.toFixed(2)}</td>`).join("")+"</tr>";
+  });
+  $("tScores").innerHTML=a; $("tW").innerHTML=b;
+}
+function render(){$("scaleOut").textContent=(+$("scale").value).toFixed(1);draw();tables();}
+document.querySelectorAll(".steps button").forEach(b=>b.onclick=()=>{step=+b.dataset.step;stop();render();});
+$("scale").oninput=render; $("mask").onchange=render;
+function stop(){clearInterval(timer);timer=null;$("play").textContent="▶ 自动播放";}
+$("play").onclick=()=>{
+  if(timer){stop();return;}
+  $("play").textContent="❚❚ 暂停";
+  timer=setInterval(()=>{step=(step+1)%3; if(step===0) sel=(sel+1)%4; render();},1800);
+};
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",render);
+new MutationObserver(render).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+render();
+</script>

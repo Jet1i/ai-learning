@@ -1,0 +1,154 @@
+<title>为什么要除以 √d</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@900&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one column; a sticky-free control strip, then three stacked "instruments" that all react to d */
+:root{
+  --bg:#f3f5f2; --panel:#ffffff; --fg:#1d2420; --muted:#66716a; --line:#d6ddd8;
+  --q:#2f6fd6; --k:#c2571a; --good:#2b8a57; --bad:#c23b3b; --accent:#2f6fd6;
+  --display:"Noto Serif SC",serif; --body:"Noto Sans SC",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141917; --panel:#1c2320; --fg:#e6ece8; --muted:#94a19a; --line:#2f3934;
+  --q:#6fa3ff; --k:#f08a4b; --good:#5cc98d; --bad:#ff7a7a; --accent:#6fa3ff; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --panel:#1c2320; --fg:#e6ece8; --muted:#94a19a; --line:#2f3934;
+  --q:#6fa3ff; --k:#f08a4b; --good:#5cc98d; --bad:#ff7a7a; --accent:#6fa3ff; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.6}
+.wrap{max-width:860px;margin:0 auto;padding-block:28px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:22px}
+h1{font-family:var(--display);font-weight:900;font-size:2rem;margin:0;text-wrap:balance}
+h2{font-size:1.05rem;margin:0;text-wrap:balance}
+p{margin:0;max-width:65ch}
+.muted{color:var(--muted)}
+.controls{display:flex;flex-wrap:wrap;gap:14px 28px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+.controls label{display:flex;gap:10px;align-items:center}
+.controls output{font-family:var(--mono);font-weight:600;min-width:3ch}
+input[type=range]{width:200px;max-width:50vw}
+.toggle{font:inherit;font-weight:700;border:2px solid var(--accent);background:transparent;color:var(--accent);border-radius:8px;padding:6px 14px;cursor:pointer}
+.toggle[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+.btn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:8px;padding:5px 12px;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+section{display:flex;flex-direction:column;gap:8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;overflow-x:auto}
+svg{display:block;width:100%;min-width:480px;height:auto}
+.readout{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.95rem}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <h1>为什么要除以 √d</h1>
+  <p class="muted">拖动维度 d，下面三个图一起变。先不开 ÷√d 看问题出在哪，再打开对比。</p>
+
+  <div class="controls">
+    <label for="d">维度 d = <output id="dOut">64</output>
+      <input id="d" type="range" min="0" max="7" step="1" value="4"></label>
+    <button class="toggle" id="scale" aria-pressed="false">÷√d：关</button>
+  </div>
+
+  <section>
+    <h2>① 一次点积 = d 个小乘积加起来</h2>
+    <p class="muted">每根柱子是 qᵢ·kᵢ，有正有负。它们一根根累加，黑点就是当前总和。d 越大，加的数越多，总和跑得越远（大约 ±√d）。</p>
+    <div class="card"><svg id="terms" viewBox="0 0 640 220"></svg></div>
+    <div class="row"><button class="btn" id="again">再抽一对 q、k</button><span class="readout" id="dotOut"></span></div>
+  </section>
+
+  <section>
+    <h2>② 抽 3000 对，分数分布有多宽</h2>
+    <p class="muted">横轴固定在 −30 到 30。虚线标出 ±1 个标准差。</p>
+    <div class="card"><svg id="hist" viewBox="0 0 640 200"></svg></div>
+    <p class="readout" id="histOut"></p>
+  </section>
+
+  <section>
+    <h2>③ 一行 6 个分数进 softmax，还剩多少梯度</h2>
+    <p class="muted">柱子是 softmax 后的权重。下面的条是“梯度信号”1 − Σp²：权重越平均越大，变成“一个 1，其余 0”时掉到 0，反向传播就几乎传不回去了。</p>
+    <div class="card"><svg id="soft" viewBox="0 0 640 240"></svg></div>
+    <div class="row"><button class="btn" id="again2">换一行分数</button></div>
+  </section>
+</div>
+
+<script>
+const DS=[4,8,16,32,64,128,256,512];
+const $=id=>document.getElementById(id);
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const randn=()=>{let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);};
+let scaled=false, terms=[], shown=0, anim=null, row=[];
+
+const d=()=>DS[+$("d").value];
+const f=()=>scaled?1/Math.sqrt(d()):1;
+
+function newPair(){
+  terms=Array.from({length:d()},()=>randn()*randn());
+  shown=0; cancelAnimationFrame(anim);
+  const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const t0=performance.now(), dur=reduce?0:1400;
+  const tick=t=>{shown=Math.min(terms.length,Math.ceil(terms.length*(dur?(t-t0)/dur:1)));drawTerms();if(shown<terms.length)anim=requestAnimationFrame(tick);};
+  anim=requestAnimationFrame(tick);
+}
+function drawTerms(){
+  const fg=css("--fg"),mu=css("--muted"),ln=css("--line"),q=css("--q"),k=css("--k"),acc=css("--accent");
+  const n=terms.length, show=Math.min(n,64), bw=560/show;
+  let h=`<line x1="40" y1="80" x2="620" y2="80" stroke="${ln}"/>`;
+  for(let i=0;i<show;i++){
+    const idx=Math.floor(i*n/show), v=terms[idx], on=idx<shown;
+    const hgt=Math.max(-60,Math.min(60,v*20));
+    h+=`<rect x="${50+i*bw}" y="${hgt>0?80-hgt:80}" width="${Math.max(1,bw-1.5)}" height="${Math.abs(hgt)}" fill="${v>0?q:k}" opacity="${on?.9:.15}"/>`;
+  }
+  if(n>64) h+=`<text x="620" y="20" text-anchor="end" font-size="12" fill="${mu}">共 ${n} 项，这里抽样显示 64 根</text>`;
+  // number line for running sum
+  const sum=terms.slice(0,shown).reduce((a,b)=>a+b,0)*f();
+  const X=v=>330+Math.max(-30,Math.min(30,v))*9.5;
+  h+=`<line x1="45" y1="180" x2="615" y2="180" stroke="${mu}"/>`;
+  [-30,-20,-10,0,10,20,30].forEach(t=>{h+=`<line x1="${X(t)}" y1="175" x2="${X(t)}" y2="185" stroke="${mu}"/><text x="${X(t)}" y="203" text-anchor="middle" font-size="12" font-family="JetBrains Mono,monospace" fill="${mu}">${t}</text>`;});
+  h+=`<rect x="${X(-1)}" y="172" width="${X(1)-X(-1)}" height="16" fill="${css("--good")}" opacity=".25"/>`;
+  h+=`<circle cx="${X(sum)}" cy="180" r="8" fill="${fg}" style="transition:cx .08s"/>`;
+  h+=`<text x="45" y="160" font-size="12" fill="${mu}">累加总和${scaled?"（已 ÷√d）":""}；绿色区间是 ±1</text>`;
+  $("terms").innerHTML=h;
+  $("dotOut").textContent=`点积 = ${sum.toFixed(2)}（已加 ${shown}/${n} 项）`;
+}
+
+function drawHist(){
+  const mu=css("--muted"),ln=css("--line"),acc=css("--accent"),bad=css("--bad");
+  const N=3000, dd=d(), s=[];
+  for(let i=0;i<N;i++){let t=0;for(let j=0;j<dd;j++)t+=randn()*randn();s.push(t*f());}
+  const bins=new Array(60).fill(0); s.forEach(v=>{const b=Math.floor((v+30)); if(b>=0&&b<60)bins[b]++;});
+  const mx=Math.max(...bins), X=v=>20+(v+30)/60*600;
+  let h="";
+  bins.forEach((c,i)=>{const hh=c/mx*150;h+=`<rect x="${X(i-30)+0.5}" y="${170-hh}" width="${600/60-1}" height="${hh}" fill="${scaled||dd<=8?acc:bad}" opacity=".8"/>`;});
+  h+=`<line x1="20" y1="170" x2="620" y2="170" stroke="${mu}"/>`;
+  [-30,-20,-10,0,10,20,30].forEach(t=>h+=`<text x="${X(t)}" y="190" text-anchor="middle" font-size="12" font-family="JetBrains Mono,monospace" fill="${mu}">${t}</text>`);
+  const std=Math.sqrt(s.reduce((a,v)=>a+v*v,0)/N);
+  [-std,std].forEach(v=>{const x=X(Math.max(-30,Math.min(30,v)));h+=`<line x1="${x}" y1="12" x2="${x}" y2="170" stroke="${mu}" stroke-dasharray="4 4"/>`;});
+  $("hist").innerHTML=h;
+  $("histOut").textContent=`标准差 ≈ ${std.toFixed(1)}　　（√${dd} = ${Math.sqrt(dd).toFixed(1)}）${scaled?"　÷√d 之后都回到 1 左右":""}`;
+}
+
+function newRow(){const dd=d();row=Array.from({length:6},()=>{let t=0;for(let j=0;j<dd;j++)t+=randn()*randn();return t;});drawSoft();}
+function drawSoft(){
+  const fg=css("--fg"),mu=css("--muted"),ln=css("--line"),acc=css("--accent"),good=css("--good"),bad=css("--bad");
+  const r=row.map(v=>v*f()), m=Math.max(...r), e=r.map(v=>Math.exp(v-m)), z=e.reduce((a,b)=>a+b,0), p=e.map(v=>v/z);
+  const g=1-p.reduce((a,v)=>a+v*v,0), gmax=1-1/6;
+  let h="";
+  p.forEach((v,i)=>{
+    const x=40+i*95, hh=v*130;
+    h+=`<rect x="${x}" y="${150-hh}" width="70" height="${hh}" rx="4" fill="${acc}" style="transition:all .4s"/>`;
+    h+=`<text x="${x+35}" y="${142-hh}" text-anchor="middle" font-size="13" font-family="JetBrains Mono,monospace" font-weight="600" fill="${fg}">${v.toFixed(2)}</text>`;
+    h+=`<text x="${x+35}" y="170" text-anchor="middle" font-size="12" font-family="JetBrains Mono,monospace" fill="${mu}">分数 ${r[i].toFixed(1)}</text>`;
+  });
+  const w=g/gmax*560, col=g/gmax>.35?good:bad;
+  h+=`<rect x="40" y="194" width="560" height="18" rx="9" fill="${ln}"/>`;
+  h+=`<rect x="40" y="194" width="${Math.max(2,w)}" height="18" rx="9" fill="${col}" style="transition:width .4s"/>`;
+  h+=`<text x="40" y="232" font-size="13" fill="${fg}">梯度信号 ${g.toFixed(3)}${g<0.05?"　几乎为 0，学不动":g/gmax>.35?"　正常，可以学":"　偏弱"}</text>`;
+  $("soft").innerHTML=h;
+}
+
+function all(){ $("dOut").textContent=d(); newPair(); drawHist(); newRow(); }
+$("d").oninput=all;
+$("scale").onclick=()=>{scaled=!scaled;$("scale").setAttribute("aria-pressed",scaled);$("scale").textContent="÷√d："+(scaled?"开":"关");drawTerms();drawHist();drawSoft();};
+$("again").onclick=newPair; $("again2").onclick=newRow;
+const redraw=()=>{drawTerms();drawHist();drawSoft();};
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",redraw);
+new MutationObserver(redraw).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+all();
+</script>

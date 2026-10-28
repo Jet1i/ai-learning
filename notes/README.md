@@ -6,7 +6,7 @@
 |---|---|---|---|---|
 | 1 | API 调用、多轮对话、Prompt、JSON、eval | [week01](week01-api-basics.md) | 练习全部完成 | chat2.py 截断作业 |
 | 2 | 梯度下降、反向传播、Adam | [week02](week02-backprop-adam.md) | 3.5/5 | 参数 vs 学习率、zero_grad、手推反向传播 |
-| 3 | Transformer | | | |
+| 3 | 自注意力、Transformer block、交叉熵、迷你 GPT、GPT-2 | [week03](week03-transformer.md) | 3.2/5 | 参数估算公式、上下文长度 vs 参数 vs 显存、残差的作用 |
 
 ## 每篇笔记的固定结构
 一句话总结 → 核心概念 → 关键代码 → 实验结果 → 我的提问与解答 → 易错点 → 复习题

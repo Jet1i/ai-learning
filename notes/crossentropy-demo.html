@@ -1,0 +1,111 @@
+<title>交叉熵怎么打分</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@900&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: prompt strip on top, then two instruments side by side (bars | −log p curve), stacking on phones */
+:root{
+  --bg:#f3f5f2; --panel:#ffffff; --fg:#1d2420; --muted:#66716a; --line:#d6ddd8;
+  --accent:#2f6fd6; --good:#2b8a57; --bad:#c23b3b;
+  --display:"Noto Serif SC",serif; --body:"Noto Sans SC",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141917; --panel:#1c2320; --fg:#e6ece8; --muted:#94a19a; --line:#2f3934;
+  --accent:#6fa3ff; --good:#5cc98d; --bad:#ff7a7a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --panel:#1c2320; --fg:#e6ece8; --muted:#94a19a; --line:#2f3934;
+  --accent:#6fa3ff; --good:#5cc98d; --bad:#ff7a7a; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.6}
+.wrap{max-width:900px;margin:0 auto;padding-block:28px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:20px}
+h1{font-family:var(--display);font-weight:900;font-size:2rem;margin:0;text-wrap:balance}
+p{margin:0;max-width:65ch}
+.muted{color:var(--muted)}
+.prompt{font-size:1.6rem;font-weight:700;letter-spacing:.05em}
+.prompt .blank{display:inline-block;min-width:1.4em;border-bottom:3px solid var(--accent);color:var(--accent);text-align:center}
+.controls{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+.controls label{display:flex;gap:10px;align-items:center}
+.controls output{font-family:var(--mono);font-weight:600;min-width:4ch}
+input[type=range]{width:220px;max-width:55vw}
+.play{font:inherit;font-weight:700;background:var(--fg);color:var(--bg);border:0;border-radius:8px;padding:7px 16px;cursor:pointer}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chips button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:999px;padding:3px 12px;cursor:pointer}
+.chips button[aria-pressed="true"]{background:var(--good);border-color:var(--good);color:var(--bg)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0;display:flex;flex-direction:column;gap:6px}
+.card h2{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0;font-weight:500}
+svg{display:block;width:100%;height:auto}
+.big{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:1.4rem;font-weight:600}
+</style>
+
+<div class="wrap">
+  <h1>交叉熵怎么打分</h1>
+  <p class="muted">模型读到“小明吃”，要给词表里每个字一个概率。答案揭晓后，loss 只看一件事：<b>它给正确答案的概率 p 是多少</b>，loss = −log p。</p>
+  <p class="prompt">小明吃<span class="blank" id="blank">？</span></p>
+
+  <div class="controls">
+    <label for="prog">训练进度 <output id="progOut">0</output>
+      <input id="prog" type="range" min="0" max="100" value="0"></label>
+    <button class="play" id="play">▶ 播放训练</button>
+    <div class="chips" role="group" aria-label="正确答案" id="chips"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>模型给出的概率（31 个字里前 8 个）</h2><svg id="bars" viewBox="0 0 420 240"></svg></div>
+    <div class="card"><h2>loss = −log p</h2><svg id="curve" viewBox="0 0 420 240"></svg>
+      <div class="big" id="lossOut"></div><p class="muted" id="note"></p></div>
+  </div>
+  <p class="muted">练习里的数字也在这：训练前 loss ≈ ln(31) = 3.43，相当于 31 个字平均猜；训练后 loss 停在 0.77 左右下不去，因为“小明吃”后面本来就有 4 种食物可选，p 最多也就 0.25 左右（而“小明在超市吃苹”后面一定是“果”，那里 p 能接近 1）。</p>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const cands=["米","西","面","苹","明","水","去","。"];
+const trained=[0.27,0.25,0.24,0.235,0.001,0.001,0.001,0.001];
+let ans="米", timer=null;
+cands.forEach(c=>{const b=document.createElement("button");b.textContent="答案="+c;b.dataset.c=c;b.onclick=()=>{ans=c;render();};$("chips").appendChild(b);});
+
+function probs(){
+  const t=+$("prog").value/100, u=1/31;
+  return cands.map((c,i)=>u*(1-t)+trained[i]*t);
+}
+function render(){
+  const fg=css("--fg"),mu=css("--muted"),ln=css("--line"),acc=css("--accent"),good=css("--good"),bad=css("--bad");
+  $("progOut").textContent=$("prog").value+"%";
+  document.querySelectorAll("#chips button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.c===ans));
+  $("blank").textContent=ans;
+  const p=probs(), pa=p[cands.indexOf(ans)], loss=-Math.log(pa);
+  // bars
+  let h=`<line x1="20" y1="200" x2="410" y2="200" stroke="${ln}"/>`;
+  p.forEach((v,i)=>{const x=24+i*48,hh=v/0.3*170,isA=cands[i]===ans;
+    h+=`<rect x="${x}" y="${200-hh}" width="36" height="${hh}" rx="4" fill="${isA?good:acc}" opacity="${isA?1:.55}"/>`;
+    h+=`<text x="${x+18}" y="${194-hh}" text-anchor="middle" font-size="11" font-family="JetBrains Mono,monospace" fill="${fg}">${v.toFixed(2)}</text>`;
+    h+=`<text x="${x+18}" y="222" text-anchor="middle" font-size="15" font-weight="${isA?700:400}" fill="${isA?good:fg}">${cands[i]}</text>`;});
+  $("bars").innerHTML=h;
+  // curve
+  const X=v=>40+v*360, Y=v=>200-Math.min(v,7)/7*180;
+  let c=`<line x1="40" y1="200" x2="400" y2="200" stroke="${mu}"/><line x1="40" y1="20" x2="40" y2="200" stroke="${mu}"/>`;
+  [0,1,2,3,4,5,6,7].forEach(t=>c+=`<text x="32" y="${Y(t)+4}" text-anchor="end" font-size="11" font-family="JetBrains Mono,monospace" fill="${mu}">${t}</text>`);
+  [0,.25,.5,.75,1].forEach(t=>c+=`<text x="${X(t)}" y="218" text-anchor="middle" font-size="11" font-family="JetBrains Mono,monospace" fill="${mu}">${t}</text>`);
+  c+=`<text x="400" y="234" text-anchor="end" font-size="11" fill="${mu}">p（正确答案的概率）</text>`;
+  let d="";for(let i=1;i<=200;i++){const v=i/200*0.999+0.001;d+=(i===1?"M":"L")+X(v).toFixed(1)+" "+Y(-Math.log(v)).toFixed(1);}
+  c+=`<path d="${d}" fill="none" stroke="${fg}" stroke-width="2"/>`;
+  c+=`<line x1="${X(pa)}" y1="${Y(loss)}" x2="${X(pa)}" y2="200" stroke="${loss>2?bad:good}" stroke-dasharray="4 4"/>`;
+  c+=`<circle cx="${X(pa)}" cy="${Y(loss)}" r="7" fill="${loss>2?bad:good}"/>`;
+  $("curve").innerHTML=c;
+  $("lossOut").textContent=`p = ${pa.toFixed(3)}　loss = ${loss.toFixed(2)}`;
+  $("note").textContent= pa<0.01 ? "给正确答案的概率几乎为 0，罚得非常重：越自信地错，loss 越大。"
+    : loss>3 ? "还在瞎猜阶段，31 个字差不多平均分。"
+    : loss>1 ? "开始像样了，正确答案的概率在涨。"
+    : "p 越接近 1，loss 越接近 0。";
+}
+$("prog").oninput=render;
+$("play").onclick=()=>{
+  if(timer){clearInterval(timer);timer=null;$("play").textContent="▶ 播放训练";return;}
+  $("prog").value=0;$("play").textContent="❚❚ 暂停";
+  timer=setInterval(()=>{const v=+$("prog").value+2;$("prog").value=Math.min(100,v);render();if(v>=100){clearInterval(timer);timer=null;$("play").textContent="▶ 播放训练";}},60);
+};
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",render);
+new MutationObserver(render).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+render();
+</script>
