@@ -70,6 +70,7 @@ for step in range(MAX_STEPS):            # 结束条件 2：步数上限
 - **多轮 function call 要写 stop 吗？** 原生 tools 不用，文本版 ReAct 才要。
 - **Agent 为什么主动问要不要帮我写笔记？** 训练出来的"贴心助手"习惯。模型说的话 ≠ 它能做的事，能力只由 tools 列表决定。
 - **我这里已经有 harness 了吗？** 有，agent.py 就是迷你 harness。
+- **Function Calling 和 MCP 最主要的区别？** 它们不是二选一，管的是两段不同的连接：Function Calling 是"模型 ↔ 你的代码"（模型怎么表达要调工具），MCP 是"你的代码 ↔ 工具"（工具住在哪、怎么被发现和调用）。mcp_agent.py 两个都用了。MCP 的价值是解耦、复用（不重复造轮子）、动态发现、跨厂商标准、工具可远程部署并单独管权限。
 
 ## 易错点
 - 发回结果时要对上的是 **`tool_call_id`**（调用的 id），不是工具名；role 是 `"tool"` 不是 `"tools"`。
