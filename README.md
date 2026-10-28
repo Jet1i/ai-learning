@@ -19,11 +19,16 @@
 | week3/block.py | 多头注意力 + Transformer block |
 | week3/minigpt.py | torch 迷你 GPT（交叉熵训练） |
 | week3/gpt2.py | 加载 GPT-2 生成文本 |
+| week4/fc1.py | Function Calling：模型请求、代码执行 |
+| week4/react1.py | 从零手写文本版 ReAct 循环 |
+| week4/agent.py | 完整 Agent：原生 tools + 循环 + 记忆 |
+| week4/mcp_server.py | 最小 MCP Server |
+| week4/mcp_agent.py | 通过 MCP 调用工具的 Agent |
 
 ## 运行
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install openai
+pip install openai mcp
 export DEEPSEEK_API_KEY="sk-..."   # 不要把 Key 写进代码
 python week1/chat.py
 ```

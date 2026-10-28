@@ -1,0 +1,131 @@
+<title>MCP 握手与调用</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@900&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: left = Agent (host) column, right = MCP servers stacked; a wire between them shows the JSON-RPC message of the current step */
+:root {
+  --bg: #f3f5f8; --panel: #ffffff; --fg: #1d2533; --muted: #5d6879; --line: #d5dbe4;
+  --code: #0f7b6c; --code-soft: #dff3ef; --model: #b5630b; --model-soft: #fbecd9; --srv: #6a4bb5; --srv-soft: #ece6fa;
+  --f-display: "Noto Serif SC", "Songti SC", serif;
+  --f-body: "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161d; --panel: #1b212b; --fg: #e4e8ef; --muted: #98a2b3; --line: #2e3744;
+  --code: #4fc7b3; --code-soft: #173a35; --model: #f0a453; --model-soft: #3d2b17; --srv: #b39cf0; --srv-soft: #2b2348; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161d; --panel: #1b212b; --fg: #e4e8ef; --muted: #98a2b3; --line: #2e3744;
+  --code: #4fc7b3; --code-soft: #173a35; --model: #f0a453; --model-soft: #3d2b17; --srv: #b39cf0; --srv-soft: #2b2348; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 28px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 20px; }
+h1 { font-family: var(--f-display); font-weight: 900; font-size: 1.9rem; margin: 0; text-wrap: balance; }
+.lede { margin: 4px 0 0; color: var(--muted); max-width: 64ch; }
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+.box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 8px; align-content: start; min-width: 0; transition: box-shadow .3s, border-color .3s; }
+.box h2 { margin: 0; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }
+.host h2 { color: var(--code); } .host.on { border-color: var(--code); box-shadow: 0 0 0 3px var(--code-soft); }
+.part { font-size: .85rem; padding: 6px 10px; border-radius: 6px; border: 1px dashed var(--line); }
+.part.on { border-style: solid; border-color: var(--model); background: var(--model-soft); }
+.part.client.on { border-color: var(--code); background: var(--code-soft); }
+.servers { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.srv h2 { color: var(--srv); } .srv.on { border-color: var(--srv); box-shadow: 0 0 0 3px var(--srv-soft); }
+.srv .tools { font-family: var(--f-mono); font-size: .75rem; color: var(--muted); }
+.srv.ghost { opacity: .55; }
+.wire { display: grid; align-content: center; gap: 6px; min-width: 0; }
+.dir { font-family: var(--f-mono); font-size: .85rem; text-align: center; color: var(--muted); }
+.dir b { color: var(--fg); }
+pre { margin: 0; font-family: var(--f-mono); font-size: .76rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; overflow-x: auto; min-height: 9em; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font: inherit; font-size: .9rem; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--code); border-color: var(--code); color: var(--panel); font-weight: 500; }
+button:focus-visible { outline: 2px solid var(--srv); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: default; }
+.stepno { font-family: var(--f-mono); color: var(--muted); font-size: .85rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+.explain { background: var(--panel); border-left: 4px solid var(--srv); padding: 12px 16px; border-radius: 0 8px 8px 0; }
+.explain p { margin: 0; max-width: 70ch; }
+.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.compare div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: .9rem; min-width: 0; }
+.compare h3 { margin: 0 0 6px; font-size: .95rem; }
+@media (max-width: 720px) { .stage, .compare { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .box { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>MCP：Agent 和工具之间的“USB-C”</h1>
+    <p class="lede">agent.py 里工具是写死的 Python 函数。MCP 把工具搬进独立的 Server 程序，Agent 按统一协议问“你有什么工具”、再“帮我调用这个”。消息格式是 JSON-RPC，走 stdin/stdout（本地）或 HTTP（远程）。逐步点下一步，对照 mcp_agent.py。</p>
+  </header>
+
+  <div class="stage">
+    <section class="box host" id="host">
+      <h2>Host：你的 Agent</h2>
+      <div class="part" id="p-llm">DeepSeek 模型（只认 OpenAI tools 格式）</div>
+      <div class="part client" id="p-client">MCP Client（mcp_agent.py 里的 Client）</div>
+      <div class="part" id="p-loop">Agent 循环（和 agent.py 一模一样）</div>
+    </section>
+    <div class="wire">
+      <div class="dir" id="dir"></div>
+      <pre id="json"></pre>
+    </div>
+    <div class="servers">
+      <section class="box srv" id="srv1"><h2>MCP Server：jet-tools</h2><div class="tools">mcp_server.py · get_weather, calculator, word_count</div></section>
+      <section class="box srv ghost" id="srv2"><h2>MCP Server：GitHub</h2><div class="tools">别人写好的 · create_issue, search_code …</div></section>
+      <section class="box srv ghost" id="srv3"><h2>MCP Server：数据库</h2><div class="tools">别人写好的 · query, list_tables …</div></section>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="prev">上一步</button>
+    <button id="next" class="primary">下一步</button>
+    <button id="reset">重来</button>
+    <span class="stepno" id="stepno"></span>
+  </div>
+  <div class="explain"><p id="explain"></p></div>
+
+  <div class="compare">
+    <div><h3>没有 MCP</h3>每个应用为每个工具写一遍对接代码。10 个 Agent 应用 × 10 种工具 = 100 份胶水代码。</div>
+    <div><h3>有了 MCP</h3>工具方写一次 Server，任何支持 MCP 的应用（Claude、Cursor、你的 mcp_agent.py）都能直接接上。10 + 10 份。</div>
+  </div>
+</div>
+
+<script>
+const steps = [
+  { on: ["p-client", "srv1"], dir: "Client 启动子进程 → <b>Server</b>",
+    json: '$ python mcp_server.py\n（子进程启动，Client 握住它的 stdin/stdout）\n\n→ {"jsonrpc": "2.0", "id": 1,\n   "method": "initialize",\n   "params": {"clientInfo": {"name": "mcp_agent"}}}',
+    ex: "async with Client(SERVER)：Client 把 mcp_server.py 当子进程启动，先握手（initialize），双方交换版本和能力。从这以后所有消息都是一行行 JSON。" },
+  { on: ["p-client", "srv1"], dir: "Client → <b>Server</b>：tools/list",
+    json: '→ {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}\n\n← {"id": 2, "result": {"tools": [\n    {"name": "get_weather",\n     "description": "查询某个城市今天的天气",\n     "inputSchema": {"type": "object",\n       "properties": {"city": {"type": "string"}},\n       "required": ["city"]}},\n    {"name": "calculator", ...},\n    {"name": "word_count", ...}]}}',
+    ex: "list_tools()：Agent 问“你有哪些工具”。Server 返回名字、描述和参数 JSON Schema。这些 Schema 是 SDK 从 city: str 和 docstring 自动生成的，你一行没写。" },
+  { on: ["p-client", "p-llm"], dir: "Client 内部：MCP 格式 → <b>OpenAI tools 格式</b>",
+    json: '{"type": "function",\n "function": {\n   "name": "get_weather",\n   "description": "查询某个城市今天的天气",\n   "parameters": <inputSchema 原样搬过来>}}',
+    ex: "to_openai_tool()：两边都用 JSON Schema，只是外层包装不同，套一层就行。翻译好的列表就是 L1 里 tools=TOOLS 的那个 TOOLS。" },
+  { on: ["p-loop", "p-llm"], dir: "Agent 循环 → <b>模型</b>：create(messages, tools)",
+    json: '← tool_calls: [{"id": "call_01",\n   "function": {"name": "get_weather",\n                "arguments": "{\\"city\\": \\"北京\\"}"}}]',
+    ex: "和 agent.py 完全一样：模型不知道 MCP 的存在，它只看到 tools 说明书，返回 tool_calls。" },
+  { on: ["p-client", "srv1"], dir: "Client → <b>Server</b>：tools/call",
+    json: '→ {"jsonrpc": "2.0", "id": 3, "method": "tools/call",\n   "params": {"name": "get_weather",\n              "arguments": {"city": "北京"}}}\n\n← {"id": 3, "result": {"content": [\n    {"type": "text", "text": "晴，12°C"}]}}',
+    ex: "唯一的变化：以前是 FUNCTIONS[name](**args) 调本地函数，现在是 await mcp.call_tool(name, args) 发给 Server。函数在 Server 进程里执行，结果按 MCP 格式（content 列表）返回。" },
+  { on: ["p-loop", "p-llm"], dir: "结果作为 role=\"tool\" 发回 <b>模型</b>",
+    json: '{"role": "tool", "tool_call_id": "call_01",\n "content": "晴，12°C"}',
+    ex: "把 content 里的文字取出来，照旧 append 进 messages，进入下一轮循环。Agent 循环一个字没改。" },
+  { on: ["p-client", "srv1", "srv2", "srv3"], dir: "同一个 Client 可以接 <b>很多 Server</b>",
+    json: 'servers = [jet-tools, github, database]\nfor s in servers:\n    tools += s.list_tools()\n\n# 模型现在同时有了天气、GitHub、数据库的能力\n# Agent 代码不用为任何一个工具改一行',
+    ex: "这就是 MCP 的价值：工具和 Agent 解耦。下周（第 5 周）你会把“知识库检索”写成自己的 MCP Server，同时能给 Claude Desktop、Cursor 这些应用用。" },
+];
+let i = 0;
+const $ = id => document.getElementById(id);
+const ids = ["host", "p-llm", "p-client", "p-loop", "srv1", "srv2", "srv3"];
+function render() {
+  const s = steps[i];
+  ids.forEach(id => $(id).classList.toggle("on", s.on.includes(id)));
+  $("host").classList.toggle("on", s.on.some(x => x.startsWith("p-")));
+  ["srv2", "srv3"].forEach(id => $(id).classList.toggle("ghost", !s.on.includes(id)));
+  $("dir").innerHTML = s.dir; $("json").textContent = s.json; $("explain").textContent = s.ex;
+  $("stepno").textContent = `第 ${i + 1} / ${steps.length} 步`;
+  $("prev").disabled = i === 0; $("next").disabled = i === steps.length - 1;
+}
+$("next").onclick = () => { if (i < steps.length - 1) { i++; render(); } };
+$("prev").onclick = () => { if (i > 0) { i--; render(); } };
+$("reset").onclick = () => { i = 0; render(); };
+render();
+</script>

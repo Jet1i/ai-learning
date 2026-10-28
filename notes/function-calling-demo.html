@@ -1,0 +1,142 @@
+<title>Function Calling 往返</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;900&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: three swim lanes (用户 / 你的代码 / 模型) on top, the growing messages list below; one step at a time */
+:root {
+  --bg: #f3f5f8; --panel: #ffffff; --fg: #1d2533; --muted: #5d6879; --line: #d5dbe4;
+  --code: #0f7b6c; --code-soft: #dff3ef;
+  --model: #b5630b; --model-soft: #fbecd9;
+  --user: #3c5bb8; --user-soft: #e3e9fa;
+  --f-display: "Noto Serif SC", "Songti SC", serif;
+  --f-body: "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161d; --panel: #1b212b; --fg: #e4e8ef; --muted: #98a2b3; --line: #2e3744;
+  --code: #4fc7b3; --code-soft: #173a35; --model: #f0a453; --model-soft: #3d2b17; --user: #8ea8f5; --user-soft: #1f2a4a; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161d; --panel: #1b212b; --fg: #e4e8ef; --muted: #98a2b3; --line: #2e3744;
+  --code: #4fc7b3; --code-soft: #173a35; --model: #f0a453; --model-soft: #3d2b17; --user: #8ea8f5; --user-soft: #1f2a4a; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 28px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 20px; }
+h1 { font-family: var(--f-display); font-weight: 900; font-size: 1.9rem; margin: 0; text-wrap: balance; }
+.lede { margin: 4px 0 0; color: var(--muted); max-width: 62ch; }
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.lane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-height: 150px; display: grid; align-content: start; gap: 8px; transition: box-shadow .3s, border-color .3s; min-width: 0; }
+.lane h2 { margin: 0; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+.lane h2 .dot { width: 10px; height: 10px; border-radius: 50%; }
+.lane.user h2 { color: var(--user); } .lane.user .dot { background: var(--user); }
+.lane.code h2 { color: var(--code); } .lane.code .dot { background: var(--code); }
+.lane.model h2 { color: var(--model); } .lane.model .dot { background: var(--model); }
+.lane.active.user { border-color: var(--user); box-shadow: 0 0 0 3px var(--user-soft); }
+.lane.active.code { border-color: var(--code); box-shadow: 0 0 0 3px var(--code-soft); }
+.lane.active.model { border-color: var(--model); box-shadow: 0 0 0 3px var(--model-soft); }
+.lane .say { font-size: .92rem; min-height: 3em; }
+.lane .note { font-size: .78rem; color: var(--muted); }
+.arrow { font-family: var(--f-mono); font-size: .85rem; text-align: center; color: var(--muted); min-height: 1.6em; }
+.arrow b { color: var(--fg); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font: inherit; font-size: .9rem; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--code); border-color: var(--code); color: var(--panel); font-weight: 500; }
+button:focus-visible { outline: 2px solid var(--user); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: default; }
+.stepno { font-family: var(--f-mono); color: var(--muted); font-size: .85rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+.explain { background: var(--panel); border-left: 4px solid var(--code); padding: 12px 16px; border-radius: 0 8px 8px 0; }
+.explain p { margin: 0; max-width: 70ch; }
+.msgs h3 { margin: 0 0 8px; font-size: 1rem; }
+.msgs h3 small { color: var(--muted); font-weight: 400; }
+.list { display: grid; gap: 6px; overflow-x: auto; }
+.msg { font-family: var(--f-mono); font-size: .8rem; padding: 8px 12px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; animation: pop .35s ease; }
+.msg .role { font-weight: 600; }
+.msg.user .role { color: var(--user); } .msg.assistant .role { color: var(--model); } .msg.tool .role { color: var(--code); }
+.msg.new { border-color: var(--fg); }
+.empty { color: var(--muted); font-size: .85rem; }
+@keyframes pop { from { transform: translateY(6px); opacity: .3; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .msg { animation: none; } .lane { transition: none; } }
+@media (max-width: 640px) { .lanes { grid-template-columns: 1fr; } .lane { min-height: 0; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>一次 Function Calling 的完整往返</h1>
+    <p class="lede">模型永远不执行函数，它只输出“我想调用谁、参数是什么”的 JSON。执行的是你的代码。逐步点“下一步”，盯住下面的 messages 列表怎么长出来，这和 fc1.py 一一对应。</p>
+  </header>
+
+  <div class="lanes">
+    <section class="lane user" id="lane-user"><h2><span class="dot"></span>用户</h2><div class="say" id="say-user"></div></section>
+    <section class="lane code" id="lane-code"><h2><span class="dot"></span>你的 Python 代码</h2><div class="say" id="say-code"></div><div class="note">FUNCTIONS = {get_weather, calculator}</div></section>
+    <section class="lane model" id="lane-model"><h2><span class="dot"></span>DeepSeek 模型</h2><div class="say" id="say-model"></div><div class="note">只能看到 messages 和 tools 说明书</div></section>
+  </div>
+  <div class="arrow" id="arrow"></div>
+
+  <div class="controls">
+    <button id="prev">上一步</button>
+    <button id="next" class="primary">下一步</button>
+    <button id="play">自动播放</button>
+    <button id="reset">重来</button>
+    <span class="stepno" id="stepno"></span>
+  </div>
+
+  <div class="explain"><p id="explain"></p></div>
+
+  <section class="msgs">
+    <h3>messages <small>每次请求都把整个列表发给模型（模型没有记忆）</small></h3>
+    <div class="list" id="list"></div>
+  </section>
+</div>
+
+<script>
+const M = {
+  user: { role: "user", text: '{"role": "user", "content": "北京今天天气怎么样？"}' },
+  call: { role: "assistant", text: '{"role": "assistant", "content": null,\n "tool_calls": [{"id": "call_01", "type": "function",\n   "function": {"name": "get_weather", "arguments": "{\\"city\\": \\"北京\\"}"}}]}' },
+  tool: { role: "tool", text: '{"role": "tool", "tool_call_id": "call_01", "content": "晴，12°C"}' },
+  final: { role: "assistant", text: '{"role": "assistant", "content": "北京今天晴，气温 12°C，适合出门。"}' },
+};
+const steps = [
+  { lane: "user", user: "北京今天天气怎么样？", arrow: "用户 → <b>代码</b>", msgs: ["user"],
+    ex: "用户提问。你的代码把问题放进 messages，这时列表里只有一条 user 消息。" },
+  { lane: "model", code: "第 1 次请求：messages + tools", model: "读到问题，也读到 get_weather 的说明书……", arrow: "代码 → <b>模型</b>：create(messages, tools=TOOLS)", msgs: ["user"],
+    ex: "第一次调用 API。除了 messages，还附上 tools：每个工具的名字、描述、参数的 JSON Schema。模型看不到你的函数代码，只看到这份说明书。" },
+  { lane: "code", model: "返回：我想调用 get_weather(city=北京)", code: "收到 tool_calls，content 是空的", arrow: "模型 → <b>代码</b>：finish_reason = \"tool_calls\"", msgs: ["user", "call"],
+    ex: "模型没有直接回答，而是返回一个“调用请求”。注意 arguments 是一段 JSON 字符串，要用 json.loads 解析。这条请求也要 append 进 messages。" },
+  { lane: "code", code: "执行 get_weather(\"北京\") → \"晴，12°C\"", arrow: "代码自己执行函数（模型此刻什么都没做）", msgs: ["user", "call"],
+    ex: "关键一步：真正执行函数的是你的代码。所以权限、安全检查（比如 calculator 只允许四则运算）都由你控制。" },
+  { lane: "code", code: "append role=\"tool\"，tool_call_id 对上 call_01", arrow: "结果写回 messages", msgs: ["user", "call", "tool"],
+    ex: "把结果包装成 role=\"tool\" 的消息，tool_call_id 必须等于刚才那个调用的 id，模型靠它知道这是哪次调用的结果。" },
+  { lane: "model", code: "第 2 次请求：完整的 3 条 messages", model: "看到结果“晴，12°C”，组织成人话", arrow: "代码 → <b>模型</b>：create(messages, tools=TOOLS)", msgs: ["user", "call", "tool"],
+    ex: "第二次调用 API，把整个列表再发一遍。模型没有记忆，它“记得”自己调用过工具，完全是因为列表里有那条 assistant 消息。" },
+  { lane: "user", model: "返回最终回答", user: "北京今天晴，气温 12°C，适合出门。", arrow: "模型 → 代码 → <b>用户</b>", msgs: ["user", "call", "tool", "final"],
+    ex: "这次 tool_calls 为空、content 有内容，说明模型认为任务完成。如果它又返回 tool_calls，就继续执行、继续发回去。把这个“继续”写成 while 循环，就是 L2 的 Agent。" },
+];
+let i = 0, timer = null;
+const $ = id => document.getElementById(id);
+function render() {
+  const s = steps[i];
+  for (const l of ["user", "code", "model"]) $("lane-" + l).classList.toggle("active", s.lane === l);
+  // keep the last thing each lane said
+  const said = { user: "", code: "", model: "" };
+  for (let k = 0; k <= i; k++) for (const l of ["user", "code", "model"]) if (steps[k][l]) said[l] = steps[k][l];
+  $("say-user").textContent = said.user; $("say-code").textContent = said.code; $("say-model").textContent = said.model;
+  $("arrow").innerHTML = s.arrow;
+  $("explain").textContent = s.ex;
+  const prevLen = i > 0 ? steps[i - 1].msgs.length : 0;
+  $("list").innerHTML = s.msgs.map((k, idx) => {
+    const m = M[k];
+    return `<div class="msg ${m.role}${idx >= prevLen ? " new" : ""}"><span class="role">[${idx}] ${m.role}</span>\n${m.text.replace(/</g, "&lt;")}</div>`;
+  }).join("");
+  $("stepno").textContent = `第 ${i + 1} / ${steps.length} 步`;
+  $("prev").disabled = i === 0; $("next").disabled = i === steps.length - 1;
+}
+function stop() { clearInterval(timer); timer = null; $("play").textContent = "自动播放"; }
+$("next").onclick = () => { stop(); if (i < steps.length - 1) { i++; render(); } };
+$("prev").onclick = () => { stop(); if (i > 0) { i--; render(); } };
+$("reset").onclick = () => { stop(); i = 0; render(); };
+$("play").onclick = () => {
+  if (timer) return stop();
+  if (i === steps.length - 1) i = 0;
+  render(); $("play").textContent = "暂停";
+  timer = setInterval(() => { if (i < steps.length - 1) { i++; render(); } else stop(); }, 2600);
+};
+render();
+</script>
