@@ -72,6 +72,7 @@ for step in range(MAX_STEPS):            # 结束条件 2：步数上限
 - **我这里已经有 harness 了吗？** 有，agent.py 就是迷你 harness。
 - **Function Calling 和 MCP 最主要的区别？** 它们不是二选一，管的是两段不同的连接：Function Calling 是"模型 ↔ 你的代码"（模型怎么表达要调工具），MCP 是"你的代码 ↔ 工具"（工具住在哪、怎么被发现和调用）。mcp_agent.py 两个都用了。MCP 的价值是解耦、复用（不重复造轮子）、动态发现、跨厂商标准、工具可远程部署并单独管权限。
 - **哪些工具必须写在 Agent 里？** 所有工具对模型都是 function calling。经验法则：和 Agent 自身状态/界面/流程绑定的写在 Agent 里（记忆管理、todo 清单、问用户/确认、结束任务、派生子 Agent、只此一家的小功能）；可复用、属于别的系统的做成 MCP（GitHub、数据库、CRM、工单、知识库）。例：Claude Code 内置 todo/提问/子 Agent，GitHub/Slack 走 MCP。
+- **harness 就是很多本地 function calling 吗？** 不是，工具只是一部分。harness = 模型外的全部代码：循环、管上下文（messages、截断/压缩）、管工具（登记、执行、报错回传，本地或 MCP）、管安全和成本（步数上限、权限确认）、和人打交道（输入、输出、日志）。模型是大脑，工具是手，harness 是神经系统和身体；同一个模型换 harness 就是不同产品。
 
 ## 易错点
 - 发回结果时要对上的是 **`tool_call_id`**（调用的 id），不是工具名；role 是 `"tool"` 不是 `"tools"`。
