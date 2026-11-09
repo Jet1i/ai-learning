@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>句向量怎么取：[CLS]、平均池化、最后一个 token</title>
+<style>
+  :root { --bg:#fafaf7; --ink:#1f2328; --mute:#6b7280; --line:#d6d3cc; --a:#2563eb; --b:#d97706; --c:#059669; --card:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#17181a; --ink:#e8e6e1; --mute:#9ca3af; --line:#3a3c40; --card:#1f2124; } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width:860px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mute); margin:0 0 18px; }
+  .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .tabs button { border:1px solid var(--line); background:var(--card); color:var(--ink); padding:8px 14px; border-radius:999px; cursor:pointer; font:inherit; }
+  .tabs button.on { color:#fff; border-color:transparent; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  svg { width:100%; height:auto; display:block; }
+  .tok { cursor:pointer; }
+  .tok rect { stroke-width:2; }
+  .explain { margin-top:12px; }
+  .explain b { font-weight:600; }
+  .hint { color:var(--mute); font-size:13px; margin-top:6px; }
+  .grid-wrap { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; margin-top:14px; }
+  table.mask { border-collapse:collapse; font-size:12px; }
+  table.mask td, table.mask th { width:26px; height:26px; text-align:center; border:1px solid var(--line); }
+  table.mask th { color:var(--mute); font-weight:400; }
+  .cmp { margin-top:18px; border-collapse:collapse; width:100%; font-size:14px; }
+  .cmp td, .cmp th { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body>
+<main>
+  <h1>一句话 → 一个向量：三种取法</h1>
+  <p class="sub">Transformer 给每个 token 都输出一个向量。可我们只要<b>一个</b>向量来代表整句话，该怎么取？<b>点一下下面的字</b>，看看它的输出向量能"看到"哪些字。</p>
+
+  <div class="tabs" id="tabs"></div>
+  <div class="card">
+    <svg id="svg" viewBox="0 0 800 330"></svg>
+    <div class="hint" id="hint"></div>
+    <div class="grid-wrap">
+      <div>
+        <div class="hint" style="margin:0 0 4px">attention 能看到谁（行 = 谁在看，列 = 被看的字；● 能看到，· 被 mask 挡住）</div>
+        <table class="mask" id="mask"></table>
+      </div>
+      <div class="explain" id="explain" style="flex:1; min-width:260px"></div>
+    </div>
+  </div>
+
+  <table class="cmp">
+    <tr><th>取法</th><th>模型类型</th><th>为什么这样取</th><th>例子</th></tr>
+    <tr><td>[CLS]</td><td>Encoder（双向，不加 mask）</td><td>特意放一个"记录员" token，训练时只优化它</td><td>bge、BERT</td></tr>
+    <tr><td>平均池化</td><td>Encoder</td><td>每个字都能看到全句，干脆所有人投票取平均</td><td>部分 sentence-transformers 模型</td></tr>
+    <tr><td>最后一个 token</td><td>Decoder（GPT 那种，有因果 mask）</td><td>只有最后一个字能看到整句，前面的字都看不全</td><td>用大模型改造的 embedding 模型</td></tr>
+  </table>
+  <p class="hint">规则：模型<b>训练时</b>用的是哪种取法，用的时候就必须用同一种，否则向量的效果会差很多。</p>
+</main>
+
+<script>
+const MODES = {
+  cls: { name:"① Encoder + 取 [CLS]", color:"var(--a)", toks:["[CLS]","快","递","到","哪","了","[SEP]"], causal:false, pick:[0],
+    text:`<b>bge 用的就是这种。</b>[CLS] 是分词器加在句首的特殊 token，本身没有字面意思。Encoder <b>不加 mask</b>，所以它在每一层都能看到全部 7 个 token，叠完所有层之后就成了一份"全句总结"。训练时专门让配对句子的 [CLS] 向量靠近，于是只取它（蓝框）就够了。` },
+  mean: { name:"② Encoder + 平均池化", color:"var(--b)", toks:["[CLS]","快","递","到","哪","了","[SEP]"], causal:false, pick:[0,1,2,3,4,5,6],
+    text:`同样是 Encoder，每个位置都能看到全句。但这里不专门指定谁当记录员，而是把<b>所有位置的输出向量加起来除以 7</b>，取平均当句向量。思路是：每个字的输出都已经掺进了全句的信息，大家一起投票更稳。` },
+  last: { name:"③ Decoder + 取最后一个 token", color:"var(--c)", toks:["快","递","到","哪","了"], causal:true, pick:[4],
+    text:`GPT 这类 Decoder 有<b>因果 mask</b>（第 3 周 L1 练习 3）："快"只能看到自己，"递"能看到"快递"……只有<b>最后一个字"了"</b>能看到整句。如果取平均，前面那几个"只看了半句"的向量会把结果拉偏，所以只取最后一个。用大模型改造的 embedding 模型常用这种。` },
+};
+let mode = "cls", sel = null;
+const svg = document.getElementById("svg");
+
+function tabs() {
+  const t = document.getElementById("tabs"); t.innerHTML = "";
+  for (const k in MODES) {
+    const b = document.createElement("button"); b.textContent = MODES[k].name;
+    if (k === mode) { b.className = "on"; b.style.background = MODES[k].color; }
+    b.onclick = () => { mode = k; sel = null; draw(); }; t.appendChild(b);
+  }
+}
+const sees = (i, j) => !MODES[mode].causal || j <= i;
+
+function draw() {
+  tabs();
+  const M = MODES[mode], n = M.toks.length, W = 800, gap = W / (n + 1);
+  const x = i => gap * (i + 1), yIn = 290, yOut = 160, yPool = 45;
+  let s = `<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${M.color}"/></marker></defs>`;
+  s += `<text x="8" y="${yIn+5}" fill="var(--mute)" font-size="12">输入</text>`;
+  s += `<text x="8" y="${yOut+5}" fill="var(--mute)" font-size="12">输出向量</text>`;
+  s += `<rect x="${x(0)-40}" y="${(yIn+yOut)/2-18}" width="${x(n-1)-x(0)+80}" height="36" rx="8" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/>`;
+  s += `<text x="${W/2}" y="${(yIn+yOut)/2+5}" text-anchor="middle" fill="var(--mute)" font-size="13">多层 Transformer block（bge-small-zh 是 4 层）（attention ${M.causal ? "带因果 mask" : "不加 mask，双向"}）</text>`;
+  if (sel !== null) for (let j = 0; j < n; j++) if (sees(sel, j))
+    s += `<line x1="${x(j)}" y1="${yIn-18}" x2="${x(sel)}" y2="${yOut+18}" stroke="${M.color}" stroke-opacity=".55" stroke-width="2"/>`;
+  for (let i = 0; i < n; i++) {
+    const on = sel === i, picked = M.pick.includes(i);
+    s += `<g class="tok" onclick="pick(${i})"><rect x="${x(i)-30}" y="${yIn-18}" width="60" height="36" rx="8" fill="${on ? M.color : "var(--card)"}" stroke="${on ? M.color : "var(--line)"}"/>
+          <text x="${x(i)}" y="${yIn+5}" text-anchor="middle" font-size="${M.toks[i].length>1?12:16}" fill="${on ? "#fff" : "var(--ink)"}">${M.toks[i]}</text></g>`;
+    const cnt = [...Array(n).keys()].filter(j => sees(i, j)).length;
+    s += `<g class="tok" onclick="pick(${i})"><rect x="${x(i)-30}" y="${yOut-18}" width="60" height="36" rx="8" fill="var(--card)" stroke="${picked ? M.color : "var(--line)"}" stroke-width="${picked ? 3 : 1.5}"/>`;
+    for (let b = 0; b < 5; b++) s += `<rect x="${x(i)-22+b*9}" y="${yOut-6}" width="7" height="12" rx="1" fill="${picked ? M.color : "var(--mute)"}" opacity="${0.25 + 0.15*((i*3+b*7)%5)}"/>`;
+    s += `<text x="${x(i)}" y="${yOut+32}" text-anchor="middle" font-size="11" fill="var(--mute)">看到 ${cnt}/${n}</text></g>`;
+    if (picked) s += `<line x1="${x(i)}" y1="${yOut-20}" x2="${W/2}" y2="${yPool+20}" stroke="${M.color}" stroke-width="2" marker-end="url(#ar)" opacity=".8"/>`;
+  }
+  const label = mode === "mean" ? "句向量 = 7 个输出向量的平均" : `句向量 = 「${M.toks[M.pick[0]]}」位置的输出`;
+  s += `<rect x="${W/2-150}" y="${yPool-20}" width="300" height="40" rx="10" fill="${M.color}"/>
+        <text x="${W/2}" y="${yPool+6}" text-anchor="middle" fill="#fff" font-size="15">${label}</text>`;
+  svg.innerHTML = s;
+
+  document.getElementById("hint").textContent = sel === null
+    ? "👆 点任意一个字（输入或输出都行）"
+    : `「${M.toks[sel]}」的输出向量，是从 ${[...Array(n).keys()].filter(j => sees(sel, j)).map(j => M.toks[j]).join(" ")} 这些 token 里收集信息得到的。`;
+  document.getElementById("explain").innerHTML = M.text;
+
+  let t = "<tr><th></th>" + M.toks.map(w => `<th>${w.replace(/[\[\]]/g,"")}</th>`).join("") + "</tr>";
+  for (let i = 0; i < n; i++) {
+    t += `<tr><th>${M.toks[i].replace(/[\[\]]/g,"")}</th>`;
+    for (let j = 0; j < n; j++) {
+      const ok = sees(i, j), hl = sel === i;
+      t += `<td style="${hl ? `background:${M.color};color:#fff` : ""}">${ok ? "●" : "·"}</td>`;
+    }
+    t += "</tr>";
+  }
+  document.getElementById("mask").innerHTML = t;
+}
+function pick(i) { sel = sel === i ? null : i; draw(); }
+draw();
+</script>
+</body>
+</html>
