@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GPT-2 块 vs LLaMA 块</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;background:#fafaf8;color:#222;max-width:900px;margin:auto;padding:20px}
+h1{font-size:22px;margin:4px 0}p{line-height:1.6;color:#444}
+.cols{display:flex;gap:18px;flex-wrap:wrap}
+.col{flex:1;min-width:260px;background:#fff;border:1px solid #e4e4e0;border-radius:10px;padding:14px}
+.col h2{font-size:16px;margin:0 0 10px;text-align:center}
+.box{border:2px solid #cbd5e0;border-radius:8px;padding:9px;margin:6px 0;text-align:center;font-size:14px;cursor:pointer;transition:.2s;background:#f7fafc}
+.box.chg{border-color:#dd6b20;background:#fffaf0}
+.box.sel{box-shadow:0 0 0 3px #2b6cb0;}
+.arrow{text-align:center;color:#999;font-size:12px;line-height:1}
+.res{font-size:12px;color:#38a169;text-align:center}
+.card{background:#fff;border:1px solid #e4e4e0;border-radius:10px;padding:16px;margin:14px 0;min-height:120px}
+.card h3{margin:0 0 6px;font-size:17px}
+canvas{width:100%;height:auto}
+code{background:#f0f0ec;padding:1px 5px;border-radius:4px}
+.tag{display:inline-block;background:#fffaf0;border:1px solid #dd6b20;color:#c05621;border-radius:4px;padding:0 6px;font-size:12px}
+.steps{font-size:14px;line-height:1.9}
+.steps .s{margin:4px 0}.steps b{color:#2b6cb0}
+.nums input{width:56px;padding:4px;font-size:15px;text-align:center;border:1px solid #cbd5e0;border-radius:6px;margin-right:6px}
+.two{display:flex;gap:16px;flex-wrap:wrap}.two>div{flex:1;min-width:280px}
+</style></head><body>
+<h1>GPT-2 块 vs LLaMA 块:改了哪几处?</h1>
+<p>两边结构几乎一样:都是"归一化 → 注意力 → 残差 → 归一化 → FFN → 残差"。<span class="tag">橙色框</span>是 LLaMA 改动的地方。点任何一个框看解释。</p>
+<div class="cols">
+<div class="col"><h2>GPT-2 (2019)</h2>
+<div class="box" data-k="pos">词向量 + 位置向量表 P</div><div class="arrow">↓</div>
+<div class="box" data-k="norm">LayerNorm(g, b)</div><div class="arrow">↓</div>
+<div class="box" data-k="attn">多头注意力(12 头,各自有 K、V)<br><small>x@W + b</small></div>
+<div class="res">⊕ 残差</div>
+<div class="box" data-k="norm">LayerNorm(g, b)</div><div class="arrow">↓</div>
+<div class="box" data-k="ffn">FFN:GELU,d→4d→d<br><small>2 个矩阵 + 偏置</small></div>
+<div class="res">⊕ 残差</div><div class="arrow">× 12 层</div>
+</div>
+<div class="col"><h2>LLaMA (2023 起)</h2>
+<div class="box chg" data-k="pos">只有词向量(无位置表)</div><div class="arrow">↓</div>
+<div class="box chg" data-k="norm">RMSNorm(g)</div><div class="arrow">↓</div>
+<div class="box chg" data-k="attn">注意力 + RoPE 旋转 Q、K<br><small>GQA:多个头共享 K、V;x@W 无偏置</small></div>
+<div class="res">⊕ 残差</div>
+<div class="box chg" data-k="norm">RMSNorm(g)</div><div class="arrow">↓</div>
+<div class="box chg" data-k="ffn">FFN:SwiGLU,d→(8/3)d→d<br><small>3 个矩阵,无偏置</small></div>
+<div class="res">⊕ 残差</div><div class="arrow">× 32 层(7B)</div>
+</div></div>
+<div class="card" id="info"><h3>点上面的框</h3><p>每一处改动都回答两个问题:它解决什么问题?代价是什么?</p></div>
+<div class="card" id="plot" style="display:none"><canvas id="cv" width="820" height="300"></canvas>
+<p style="font-size:13px">灰:ReLU 蓝:GELU(GPT-2) 橙:SiLU(LLaMA 的门)。注意负数区:SiLU 不是一刀切成 0,梯度更平滑。</p></div>
+<div class="card">
+<h3>LayerNorm vs RMSNorm:一步步算</h3>
+<p>归一化作用在<b>每个 token 自己的向量</b>上(不跨 token)。目的:不管上一层输出的数是大是小,都先拉回一个统一的尺度,再交给下一层,训练才稳。改下面 4 个数(假装 d=4)看每一步:</p>
+<div class="nums">x = <input id="x0" value="2"><input id="x1" value="4"><input id="x2" value="6"><input id="x3" value="8"></div>
+<canvas id="nb" width="820" height="210"></canvas>
+<p style="font-size:13px;margin:0">灰:原始 x 蓝:LayerNorm 后 橙:RMSNorm 后(g=1、b=0 时)</p>
+<div class="two steps">
+<div id="ln"></div><div id="rms"></div>
+</div>
+<p style="font-size:14px">看出区别了吗:LayerNorm 先把<b>中心挪到 0</b>,再把大小缩到 1;RMSNorm <b>不挪中心</b>,只把大小缩到 1,所以全是正数的 x 归一化后还是全正。少算一个均值、少一组 b,效果却几乎一样。</p>
+</div>
+<script>
+function norm(){const x=[0,1,2,3].map(i=>+document.getElementById('x'+i).value||0),f=v=>v.toFixed(2),L=x.map(f).join(', ');
+ const mu=x.reduce((a,b)=>a+b)/4,c=x.map(v=>v-mu),va=c.reduce((a,v)=>a+v*v,0)/4,sd=Math.sqrt(va+1e-5),ln=c.map(v=>v/sd);
+ const ms=x.reduce((a,v)=>a+v*v,0)/4,rms=Math.sqrt(ms+1e-5),rn=x.map(v=>v/rms);
+ document.getElementById('ln').innerHTML=`<div class="s"><b>LayerNorm</b>(GPT-2)</div>
+ <div class="s">① 均值 μ = (${L}) / 4 = <b>${f(mu)}</b></div>
+ <div class="s">② 减均值:x − μ = [${c.map(f).join(', ')}]</div>
+ <div class="s">③ 方差 = 上面每个数平方的平均 = ${f(va)};标准差 σ = √${f(va)} = <b>${f(sd)}</b></div>
+ <div class="s">④ 除以 σ:[${ln.map(f).join(', ')}]</div>
+ <div class="s">⑤ 乘 g 加 b(两组可学参数,各 d 个)</div>
+ <div class="s">结果:均值 0、方差 1</div>`;
+ document.getElementById('rms').innerHTML=`<div class="s"><b style="color:#dd6b20">RMSNorm</b>(LLaMA)</div>
+ <div class="s">① 不算均值,直接算每个数平方的平均 = (${x.map(v=>f(v*v)).join(' + ')}) / 4 = ${f(ms)}</div>
+ <div class="s">② 均方根 RMS = √${f(ms)} = <b style="color:#dd6b20">${f(rms)}</b></div>
+ <div class="s">③ 除以 RMS:[${rn.map(f).join(', ')}]</div>
+ <div class="s">④ 只乘 g(一组参数),没有 b</div>
+ <div class="s">结果:均方根 1,均值不管</div>`;
+ const c2=document.getElementById('nb'),g=c2.getContext('2d'),W=c2.width,H=c2.height;g.clearRect(0,0,W,H);
+ const all=[...x,...ln,...rn].map(Math.abs),mx=Math.max(...all,1),mid=H/2,sc=(H/2-18)/mx;
+ g.strokeStyle='#ccc';g.beginPath();g.moveTo(0,mid);g.lineTo(W,mid);g.stroke();
+ const sets=[[x,'#a0aec0'],[ln,'#2b6cb0'],[rn,'#dd6b20']];
+ for(let i=0;i<4;i++)sets.forEach(([a,col],j)=>{const bx=40+i*200+j*45,v=a[i];g.fillStyle=col;g.fillRect(bx,v>=0?mid-v*sc:mid,38,Math.abs(v)*sc);
+  g.fillStyle='#333';g.font='11px sans-serif';g.textAlign='center';g.fillText(v.toFixed(2),bx+19,v>=0?mid-v*sc-4:mid-v*sc+12)});
+ g.fillStyle='#777';g.font='12px sans-serif';for(let i=0;i<4;i++)g.fillText('第'+(i+1)+'维',40+i*200+67,H-2)}
+[0,1,2,3].forEach(i=>document.getElementById('x'+i).oninput=norm);norm();
+</script>
+<script>
+const T={
+pos:["位置信息:位置表 → RoPE(L3 讲)","<b>GPT-2</b>:学一张位置向量表 P,第 0、1、2…个位置各一行,加到词向量上。问题:表只有 1024 行,超过就没法用;而且它记的是\"绝对位置\",模型更关心的其实是\"两个词隔多远\"。<br><b>LLaMA</b>:不加位置表,而是在注意力里把 Q、K 按位置<b>旋转</b>一个角度(RoPE)。两个向量各转一下再做点积,结果只和角度差(相对距离)有关。<br><b>代价</b>:每层都要做旋转,计算多一点点;好处是能外推到更长上下文。",false],
+norm:["LayerNorm → RMSNorm","<b>LayerNorm</b>:<code>(x − 均值) / 标准差 × g + b</code>,两组参数。<br><b>RMSNorm</b>:<code>x / 均方根 × g</code>,不减均值,不加 b。<br><b>解决什么</b>:实验发现\"减均值\"几乎没贡献,真正起作用的是把向量大小拉回 1。省掉后计算更少、速度更快(论文报告 7%~64% 不等)。<br><b>代价</b>:几乎没有。两者都放在子层<b>之前</b>(Pre-Norm),这一点 GPT-2 已经是了,LLaMA 沿用。",false],
+attn:["注意力:RoPE + GQA + 去偏置","三处改动:<br>① <b>RoPE</b>:给 Q、K 加旋转(L3)。<br>② <b>GQA</b>:原来每个头都有自己的 K、V;GQA 让几个头共享一组 K、V。推理时要缓存的 K、V(KV Cache)变成几分之一,显存省下来就能同时服务更多用户、支持更长上下文(L4)。代价:表达能力略降,但实测几乎不掉分。<br>③ <b>去掉偏置 b</b>:所有 <code>x@W + b</code> 变成 <code>x@W</code>。参数少一点,训练更稳。",false],
+ffn:["FFN:GELU → SwiGLU","<b>GPT-2</b>:<code>GELU(x·W1)·W2</code>,两个矩阵。<br><b>SwiGLU</b>:<code>(SiLU(x·W_gate) ⊙ x·W_up)·W_down</code>,三个矩阵。锚定 wx+b:一个 wx 算\"内容\",另一个 wx 过 SiLU 当\"开关\",逐维相乘,决定每一维的内容放行多少。<br><b>解决什么</b>:同样参数量下效果更好(Shazeer 2020 的实验)。为了参数量不变,中间维度从 4d 缩到 (8/3)d:3×(8/3)d² = 8d² = 2×4d²。<br><b>代价</b>:多一次矩阵乘法的调度,实际速度略慢;作者原话是\"我们无法解释为什么有效,归功于神的恩典\"。",true]};
+document.querySelectorAll('.box').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('.box').forEach(x=>x.classList.toggle('sel',x.dataset.k==b.dataset.k));
+ const [h,t,p]=T[b.dataset.k];document.getElementById('info').innerHTML=`<h3>${h}</h3><p>${t}</p>`;
+ document.getElementById('plot').style.display=p?'block':'none';if(p)plot()});
+function plot(){const c=document.getElementById('cv'),g=c.getContext('2d'),W=c.width,H=c.height;g.clearRect(0,0,W,H);
+ const X=x=>(x+4)/8*W,Y=y=>H-((y+1)/5*H);
+ g.strokeStyle='#ddd';g.beginPath();g.moveTo(0,Y(0));g.lineTo(W,Y(0));g.moveTo(X(0),0);g.lineTo(X(0),H);g.stroke();
+ g.fillStyle='#888';g.font='12px sans-serif';[-4,-2,2,4].forEach(v=>g.fillText(v,X(v)-4,Y(0)+14));[1,2,3].forEach(v=>g.fillText(v,X(0)+4,Y(v)+4));
+ const fs=[[z=>Math.max(0,z),'#aaa'],[z=>0.5*z*(1+Math.tanh(0.79788*(z+0.044715*z**3))),'#2b6cb0'],[z=>z/(1+Math.exp(-z)),'#dd6b20']];
+ fs.forEach(([f,col])=>{g.strokeStyle=col;g.lineWidth=3;g.beginPath();for(let x=-4;x<=4;x+=0.02){const y=f(x);x==-4?g.moveTo(X(x),Y(y)):g.lineTo(X(x),Y(y))}g.stroke()})}
+</script></body></html>

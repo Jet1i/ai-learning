@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scaling Laws：算力该怎么分</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;margin:0;padding:20px;background:#fafaf8;color:#222;max-width:880px;margin:auto}
+h1{font-size:22px;margin:4px 0}p{line-height:1.6;color:#444}
+.card{background:#fff;border:1px solid #e4e4e0;border-radius:10px;padding:16px;margin:14px 0}
+canvas{width:100%;height:auto;display:block}
+label{font-size:14px}input[type=range]{width:100%}
+.big{font-size:18px;font-weight:600}
+.bar{display:flex;height:28px;border-radius:6px;overflow:hidden;margin:8px 0;font-size:12px;color:#fff}
+.bar div{display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden}
+.legend span{display:inline-block;width:12px;height:12px;border-radius:3px;margin:0 4px 0 12px;vertical-align:middle}
+code{background:#f0f0ec;padding:1px 5px;border-radius:4px}
+</style></head><body>
+<h1>Scaling Laws：同样的算力，模型做大还是数据加多？</h1>
+<p>训练算力 <code>C ≈ 6·N·D</code>（N=参数，D=token）。预算固定时，N 越大 D 就越小。损失按 Chinchilla 公式 <code>Loss = 1.69 + 406.4/N^0.34 + 410.7/D^0.28</code> 计算。拖动滑块改变预算，看曲线最低点（最优模型大小）往哪走。</p>
+
+<div class="card">
+<label>算力预算 C = <b id="cval"></b> FLOPs（≈ <b id="gpud"></b> 张 A100 跑一天）</label>
+<input id="c" type="range" min="18" max="25" step="0.1" value="21">
+<canvas id="cv" width="840" height="400"></canvas>
+<div class="legend" style="font-size:13px"><span style="background:#2b6cb0"></span>当前预算的 isoFLOP 曲线 <span style="background:#ccc"></span>其他预算 <span style="background:#e53e3e"></span>最优点</div>
+</div>
+
+<div class="card">
+<div class="big" id="best"></div>
+<p style="margin:6px 0">把最优点的损失拆成三块：</p>
+<div class="bar" id="bar"></div>
+<div class="legend" style="font-size:13px"><span style="background:#718096"></span>不可约损失 E（语言本身的不确定性） <span style="background:#2b6cb0"></span>模型太小 A/N^α <span style="background:#dd6b20"></span>数据太少 B/D^β</div>
+<p>在曲线上移动鼠标/手指，看偏离最优点时哪一块变大：往左（模型小、数据多）蓝块变大；往右（模型大、数据少）橙块变大。</p>
+<div id="hover" class="big" style="font-size:15px;color:#555"></div>
+</div>
+
+<div class="card">
+<b>真实模型（圆点画在对应预算的位置）</b>
+<p>LLaMA-3 8B 和 Chinchilla 70B 花的算力差不多、损失也差不多，但 8B 推理时便宜近 9 倍。训练只付一次钱，推理天天付钱：这就是为什么今天的开源模型都"过度训练"小模型。</p>
+</div>
+<script>
+const E=1.69,A=406.4,B=410.7,al=0.34,be=0.28;
+const loss=(N,D)=>E+A/Math.pow(N,al)+B/Math.pow(D,be);
+const cv=document.getElementById('cv'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
+const pad={l:60,r:20,t:20,b:44};
+const xmin=6,xmax=12,ymin=1.8,ymax=3.6;
+const X=n=>pad.l+(Math.log10(n)-xmin)/(xmax-xmin)*(W-pad.l-pad.r);
+const Y=l=>pad.t+(ymax-l)/(ymax-ymin)*(H-pad.t-pad.b);
+const fmt=n=>n>=1e12?(n/1e12).toFixed(1)+'T':n>=1e9?(n/1e9).toFixed(1)+'B':n>=1e6?(n/1e6).toFixed(0)+'M':n.toExponential(1);
+const models=[["GPT-3 175B",175e9,300e9],["Chinchilla 70B",70e9,1.4e12],["LLaMA-1 7B",6.7e9,1e12],["LLaMA-3 8B",8e9,15e12]];
+let C=1e21,hoverN=null;
+function best(C){let bn=0,bl=9;for(let e=xmin;e<=xmax;e+=0.002){const N=10**e,l=loss(N,C/6/N);if(l<bl){bl=l;bn=N}}return [bn,bl]}
+function curve(C,col,w){g.strokeStyle=col;g.lineWidth=w;g.beginPath();let s=false;
+ for(let e=xmin;e<=xmax;e+=0.01){const N=10**e,D=C/6/N;if(D<1e6)continue;const l=loss(N,D);if(l>ymax){s=false;continue}
+ s?g.lineTo(X(N),Y(l)):(g.moveTo(X(N),Y(l)),s=true)}g.stroke()}
+function draw(){
+ g.clearRect(0,0,W,H);g.font='12px sans-serif';g.fillStyle='#666';g.strokeStyle='#eee';g.lineWidth=1;
+ for(let e=xmin;e<=xmax;e++){g.beginPath();g.moveTo(X(10**e),pad.t);g.lineTo(X(10**e),H-pad.b);g.stroke();g.fillText(fmt(10**e),X(10**e)-12,H-pad.b+16)}
+ for(let l=2;l<=3.6;l+=0.4){g.beginPath();g.moveTo(pad.l,Y(l));g.lineTo(W-pad.r,Y(l));g.stroke();g.fillText(l.toFixed(1),pad.l-30,Y(l)+4)}
+ g.fillText('模型参数 N（对数轴）→',W/2-60,H-6);g.save();g.translate(14,H/2+20);g.rotate(-Math.PI/2);g.fillText('loss',0,0);g.restore();
+ for(let e=18;e<=25;e++)curve(10**e,'#ddd',1);
+ curve(C,'#2b6cb0',3);
+ // optimal frontier
+ g.strokeStyle='#e53e3e';g.setLineDash([4,4]);g.lineWidth=1;g.beginPath();for(let e=18;e<=25;e+=0.1){const[bn,bl]=best(10**e);e==18?g.moveTo(X(bn),Y(bl)):g.lineTo(X(bn),Y(bl))}g.stroke();g.setLineDash([]);
+ const [bn,bl]=best(C);g.fillStyle='#e53e3e';g.beginPath();g.arc(X(bn),Y(bl),6,0,7);g.fill();
+ models.forEach(([n,N,D])=>{const l=loss(N,D);g.fillStyle='#38a169';g.beginPath();g.arc(X(N),Y(l),5,0,7);g.fill();g.fillStyle='#276749';g.fillText(n,X(N)+7,Y(l)-6)});
+ if(hoverN){const D=C/6/hoverN,l=loss(hoverN,D);if(l<ymax){g.fillStyle='#2b6cb0';g.beginPath();g.arc(X(hoverN),Y(l),5,0,7);g.fill()}}
+ document.getElementById('cval').textContent=C.toExponential(1);
+ document.getElementById('gpud').textContent=Math.round(C/(312e12*0.4)/86400).toLocaleString();
+ const bd=C/6/bn;
+ document.getElementById('best').textContent=`最优：N ≈ ${fmt(bn)} 参数，D ≈ ${fmt(bd)} token，D/N ≈ ${Math.round(bd/bn)}，loss ≈ ${bl.toFixed(3)}`;
+ bar(bn,bd);
+ if(hoverN){const D=C/6/hoverN;document.getElementById('hover').textContent=`鼠标处：N=${fmt(hoverN)}，D=${fmt(D)}，D/N=${(D/hoverN).toFixed(D/hoverN<10?1:0)}，loss=${loss(hoverN,D).toFixed(3)}（比最优多 ${(loss(hoverN,D)-bl).toFixed(3)}）`;bar(hoverN,D)}
+}
+function bar(N,D){const a=A/N**al,b=B/D**be,t=E+a+b;document.getElementById('bar').innerHTML=
+ `<div style="background:#718096;width:${E/t*100}%">E ${E}</div><div style="background:#2b6cb0;width:${a/t*100}%">${a.toFixed(2)}</div><div style="background:#dd6b20;width:${b/t*100}%">${b.toFixed(2)}</div>`}
+document.getElementById('c').oninput=e=>{C=10**(+e.target.value);draw()};
+function mv(ev){const r=cv.getBoundingClientRect(),x=((ev.touches?ev.touches[0].clientX:ev.clientX)-r.left)*W/r.width;const e=xmin+(x-pad.l)/(W-pad.l-pad.r)*(xmax-xmin);hoverN=(e>xmin&&e<xmax)?10**e:null;draw()}
+cv.addEventListener('mousemove',mv);cv.addEventListener('touchmove',e=>{mv(e);e.preventDefault()},{passive:false});
+cv.addEventListener('mouseleave',()=>{hoverN=null;draw()});
+draw();
+</script></body></html>

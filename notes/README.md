@@ -9,6 +9,7 @@
 | 3 | 自注意力、Transformer block、交叉熵、迷你 GPT、GPT-2 | [week03](week03-transformer.md) | 3.2/5 | 参数估算公式、上下文长度 vs 参数 vs 显存、残差的作用 |
 | 4 | Function Calling、ReAct 循环、Agent harness、MCP | [week04](week04-agent-react-mcp.md) | 3.3/5 | tool_call_id、Agent 循环两个结束条件、排查看工具日志、softmax e⁰=1 |
 | 5 | Embedding、RAG、检索 MCP Server、评测、项目 1 | [week05](week05-rag-mcp-eval.md) · [项目 1](../week5/project1/README.md) | 3.6/5 | RAG 最后一步是生成、门槛只防跑题、选型回答用数据 + 替代方案 |
+| 6 | Scaling Laws、LLaMA 架构（RMSNorm/SwiGLU）、RoPE、GQA 与 KV Cache | [week06](week06-modern-arch.md) | 约 1/5 | 参数量四步算法、显存估算（权重 + KV Cache）、算力 ×100 → N、D 各 ×10、e⁰=1 |
 
 ## 每篇笔记的固定结构
 一句话总结 → 核心概念 → 关键代码 → 实验结果 → 我的提问与解答 → 易错点 → 复习题

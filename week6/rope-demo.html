@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RoPE：用转角度表示位置</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;background:#fafaf8;color:#222;max-width:900px;margin:auto;padding:20px}
+h1{font-size:22px;margin:4px 0}p{line-height:1.6;color:#444}
+.card{background:#fff;border:1px solid #e4e4e0;border-radius:10px;padding:16px;margin:14px 0}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+canvas{max-width:100%;height:auto}
+label{font-size:14px;display:block;margin:8px 0 2px}input[type=range]{width:100%}
+.big{font-size:20px;font-weight:600}
+button{padding:6px 14px;border-radius:6px;border:1px solid #2b6cb0;background:#2b6cb0;color:#fff;font-size:14px;cursor:pointer;margin-right:6px}
+button.alt{background:#fff;color:#2b6cb0}
+code{background:#f0f0ec;padding:1px 5px;border-radius:4px}
+</style></head><body>
+<h1>RoPE:位置不再"加"一个向量,而是"转"一个角度</h1>
+<p>第 m 个位置的 q 逆时针转 m·θ,第 n 个位置的 k 转 n·θ。点积 = |q|·|k|·cos(夹角),两个都转了,<b>夹角只差 (n−m)·θ</b>。所以分数只取决于两个词隔多远。</p>
+
+<div class="card"><div class="row">
+<canvas id="c1" width="340" height="340"></canvas>
+<div style="flex:1;min-width:260px">
+<label>q("咬")在位置 m = <b id="mv"></b></label><input id="m" type="range" min="0" max="40" value="2">
+<label>k("狗")在位置 n = <b id="nv"></b></label><input id="n" type="range" min="0" max="40" value="5">
+<p style="margin:14px 0 4px">距离 n − m = <b id="dv"></b></p>
+<div class="big">score = q·k = <span id="sv"></span></div>
+<p style="margin-top:12px"><button id="shift">整句往后挪 1 格 ▶</button><button class="alt" id="play">自动挪</button></p>
+<p style="font-size:13px">点"整句往后挪":两根箭头一起转,夹角不变,分数不变。只拖其中一个滑块,距离变了,分数才变。淡色箭头是转之前的原始 q、k。</p>
+</div></div></div>
+
+<div class="card">
+<b>高维:每两维一组,像不同速度的指针</b>
+<p>d 维向量切成 d/2 对,第 i 对转速 θ<sub>i</sub> = 10000<sup>−2i/d</sup>。快的像秒针,分辨"隔 1 个还是 2 个词";慢的像时针,分辨"隔 100 个还是 1000 个词"。拖动位置看 8 根指针(d=16)。</p>
+<label>位置 pos = <b id="pv"></b></label><input id="p" type="range" min="0" max="2000" value="0">
+<canvas id="c2" width="860" height="140"></canvas>
+<p style="font-size:13px">LLaMA-3 把 10000 改成 500000:最慢的指针更慢,转一圈要更多位置,长上下文时不容易"转回原点"撞车。</p>
+</div>
+<script>
+const q=[1,0.5],k=[0.8,-0.3],th=0.3;
+const rot=(v,a)=>[Math.cos(a)*v[0]-Math.sin(a)*v[1],Math.sin(a)*v[0]+Math.cos(a)*v[1]];
+const c1=document.getElementById('c1'),g=c1.getContext('2d');
+function arrow(v,col,lab,alpha){const cx=170,cy=170,s=120;g.globalAlpha=alpha;g.strokeStyle=col;g.fillStyle=col;g.lineWidth=3;
+ const x=cx+v[0]*s,y=cy-v[1]*s;g.beginPath();g.moveTo(cx,cy);g.lineTo(x,y);g.stroke();
+ const a=Math.atan2(cy-y,x-cx);g.beginPath();g.moveTo(x,y);g.lineTo(x-10*Math.cos(a-0.4),y+10*Math.sin(a-0.4));g.lineTo(x-10*Math.cos(a+0.4),y+10*Math.sin(a+0.4));g.fill();
+ if(lab){g.font='bold 15px sans-serif';g.fillText(lab,x+6*Math.cos(a)+4,y-6*Math.sin(a))}g.globalAlpha=1}
+function d1(){const m=+M.value,n=+N.value;g.clearRect(0,0,340,340);
+ g.strokeStyle='#eee';g.lineWidth=1;g.beginPath();g.arc(170,170,120,0,7);g.moveTo(20,170);g.lineTo(320,170);g.moveTo(170,20);g.lineTo(170,320);g.stroke();
+ arrow(q,'#2b6cb0','',0.2);arrow(k,'#dd6b20','',0.2);
+ const rq=rot(q,m*th),rk=rot(k,n*th);arrow(rq,'#2b6cb0','q',1);arrow(rk,'#dd6b20','k',1);
+ document.getElementById('mv').textContent=m;document.getElementById('nv').textContent=n;document.getElementById('dv').textContent=n-m;
+ document.getElementById('sv').textContent=(rq[0]*rk[0]+rq[1]*rk[1]).toFixed(4)}
+const M=document.getElementById('m'),N=document.getElementById('n');M.oninput=N.oninput=d1;
+function shift(){if(+M.value>=40||+N.value>=40){M.value=+M.value-Math.min(+M.value,+N.value);N.value=+N.value-Math.min(+M.value,+N.value)}else{M.value=+M.value+1;N.value=+N.value+1}d1()}
+document.getElementById('shift').onclick=shift;
+let timer=null;document.getElementById('play').onclick=e=>{if(timer){clearInterval(timer);timer=null;e.target.textContent='自动挪'}else{timer=setInterval(shift,300);e.target.textContent='停止'}};
+const c2=document.getElementById('c2'),h=c2.getContext('2d'),P=document.getElementById('p');
+function d2(){const pos=+P.value,d=16;h.clearRect(0,0,860,140);document.getElementById('pv').textContent=pos;
+ for(let i=0;i<8;i++){const t=Math.pow(10000,-2*i/d),cx=55+i*107,cy=62,r=42,a=pos*t;
+ h.strokeStyle='#ddd';h.lineWidth=2;h.beginPath();h.arc(cx,cy,r,0,7);h.stroke();
+ h.strokeStyle=`hsl(${210-i*25},70%,45%)`;h.lineWidth=4;h.beginPath();h.moveTo(cx,cy);h.lineTo(cx+r*Math.sin(a),cy-r*Math.cos(a));h.stroke();
+ h.fillStyle='#555';h.font='12px sans-serif';h.textAlign='center';h.fillText(`第${i}对`,cx,cy+r+16);
+ const per=2*Math.PI/t;h.fillText(`一圈 ${per<1000?per.toFixed(0):(per/1000).toFixed(1)+'k'} 位`,cx,cy+r+31)}}
+P.oninput=d2;d1();d2();
+</script></body></html>

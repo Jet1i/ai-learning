@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KV Cache 与 GQA：显存都去哪了</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;background:#fafaf8;color:#222;max-width:900px;margin:auto;padding:20px}
+h1{font-size:22px;margin:4px 0}p{line-height:1.6;color:#444}
+.card{background:#fff;border:1px solid #e4e4e0;border-radius:10px;padding:16px;margin:14px 0}
+.btns button{padding:6px 12px;border-radius:6px;border:1px solid #2b6cb0;background:#fff;color:#2b6cb0;font-size:14px;cursor:pointer;margin:2px}
+.btns button.on{background:#2b6cb0;color:#fff}
+canvas{width:100%;height:auto;display:block}
+label{font-size:14px}input[type=range]{width:100%}
+.big{font-size:18px;font-weight:600}
+.gpu{display:flex;height:34px;border-radius:6px;overflow:hidden;border:1px solid #ccc;font-size:12px;color:#fff;margin:8px 0}
+.gpu div{display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden}
+</style></head><body>
+<h1>KV Cache 与 GQA:推理时显存都去哪了?</h1>
+<p>生成每个新 token 时,它的 q 要和<b>前面所有 token</b>的 k、v 做注意力。这些 k、v 不会变,所以存起来复用,叫 KV Cache。代价:对话越长,存得越多。</p>
+
+<div class="card">
+<b>① 生成过程:每多一个 token,每个 K/V 组就多存一格</b>
+<div class="btns" style="margin:8px 0">K/V 分组:
+<button data-kv="8" class="on">MHA:8 组(每头一组)</button><button data-kv="2">GQA:2 组(4 头共享)</button><button data-kv="1">MQA:1 组(全共享)</button>
+<button id="go" style="background:#38a169;color:#fff;border-color:#38a169">▶ 生成</button></div>
+<canvas id="cv" width="860" height="330"></canvas>
+<p style="font-size:13px">左边 8 个 Q 头(每个头还是独立地"看"),连线表示它用哪一组 K/V。右边每一格 = 一个 token 的一份 k+v。<b>格子总数 = 缓存大小</b>。</p>
+<div class="big" id="cnt"></div>
+</div>
+
+<div class="card">
+<b>② 一张 80GB 显卡部署 8B 模型(fp16):能同时服务多少对话?</b><br>
+<label>每条对话上下文长度 = <b id="tv"></b> token</label>
+<input id="t" type="range" min="10" max="17" step="1" value="12">
+<div id="bars"></div>
+<p style="font-size:13px">参数按 LLaMA-3 8B:32 层、32 个 Q 头、每头 128 维。灰 = 模型权重约 15GB + 4GB 计算空间;彩色 = 被 KV Cache 占满的显存,每一小条 = 一条对话。拖到 32K、128K 看 MHA 还剩几条。</p>
+</div>
+<script>
+let nkv=8,T=0,timer=null;const H=8,MAXT=14;
+const cv=document.getElementById('cv'),g=cv.getContext('2d');
+const col=i=>`hsl(${i*45},65%,55%)`;
+function draw(){g.clearRect(0,0,860,330);const rep=H/nkv;
+ for(let h=0;h<H;h++){const y=25+h*37;g.fillStyle='#2b6cb0';g.fillRect(20,y,70,26);g.fillStyle='#fff';g.font='13px sans-serif';g.fillText('Q 头 '+(h+1),32,y+18);
+  const grp=Math.floor(h/rep),gy=25+(grp+0.5)*(296/nkv);g.strokeStyle=col(grp*(8/nkv));g.lineWidth=2;g.beginPath();g.moveTo(90,y+13);g.lineTo(170,gy);g.stroke()}
+ for(let k=0;k<nkv;k++){const hgt=296/nkv,y=25+k*hgt;g.fillStyle=col(k*(8/nkv));g.globalAlpha=0.15;g.fillRect(170,y+2,680,hgt-4);g.globalAlpha=1;
+  g.fillStyle='#333';g.font='12px sans-serif';g.fillText('K/V 组 '+(k+1),178,y+hgt/2+4);
+  for(let t=0;t<T;t++){g.fillStyle=col(k*(8/nkv));g.fillRect(250+t*42,y+hgt/2-Math.min(14,hgt/2-4),36,Math.min(28,hgt-8))}}
+ g.fillStyle='#777';g.font='12px sans-serif';for(let t=0;t<T;t++)g.fillText('t'+(t+1),258+t*42,20);
+ document.getElementById('cnt').textContent=`已生成 ${T} 个 token,缓存 ${nkv} 组 × ${T} = ${nkv*T} 格(MHA 是 ${8*T} 格,省了 ${T?Math.round((1-nkv/8)*100):0}%)`}
+document.querySelectorAll('[data-kv]').forEach(b=>b.onclick=()=>{nkv=+b.dataset.kv;document.querySelectorAll('[data-kv]').forEach(x=>x.classList.toggle('on',x==b));draw()});
+document.getElementById('go').onclick=()=>{clearInterval(timer);T=0;timer=setInterval(()=>{T++;draw();if(T>=MAXT)clearInterval(timer)},350)};
+function bars(){const Tl=2**(+document.getElementById('t').value);document.getElementById('tv').textContent=Tl.toLocaleString();
+ const GB=1024**3,w=8e9*2/GB+4,free=80-w;let html='';
+ [['MHA(32 组)',32,'#e53e3e'],['GQA(8 组)',8,'#2b6cb0'],['MQA(1 组)',1,'#38a169']].forEach(([n,k,c])=>{
+  const per=2*32*k*128*Tl*2/GB,cnt=Math.floor(free/per);const blocks=cnt>0?`<div style="width:${cnt*per/80*100}%;background:linear-gradient(to right,${c} 80%,#fff 80%);background-size:${100/cnt}% 100%"></div>`:'';
+  html+=`<div style="margin-top:10px;font-size:14px"><b>${n}</b>:每条 ${per<1?per.toFixed(2):per.toFixed(1)} GB → <b>${cnt}</b> 条并发</div>
+  <div class="gpu"><div style="background:#a0aec0;width:${w/80*100}%">权重 ${w.toFixed(0)}GB</div>${blocks}</div>`});
+ document.getElementById('bars').innerHTML=html}
+document.getElementById('t').oninput=bars;draw();bars();
+</script></body></html>
