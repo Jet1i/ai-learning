@@ -24,11 +24,21 @@
 | week4/agent.py | 完整 Agent：原生 tools + 循环 + 记忆 |
 | week4/mcp_server.py | 最小 MCP Server |
 | week4/mcp_agent.py | 通过 MCP 调用工具的 Agent |
+| week5/embed1.py | Embedding 与余弦相似度（bge-small-zh） |
+| week5/rag1.py | 第一个 RAG：切块、检索、生成 |
+| week5/kb_server.py | 知识库检索 MCP Server |
+| week5/kb_agent.py | Agentic RAG：通过 MCP 检索的 Agent |
+| week5/eval.py | 检索与回答评测（Hit@k、门槛扫描、LLM 裁判） |
+| week5/project1/ | 项目 1：学习笔记问答 Agent（混合检索 + MCP），见其 README |
+| week6/scaling.py | Scaling Laws：6ND 与 Chinchilla 最优分配 |
+| week6/llama_block.py | LLaMA 块：RMSNorm、SwiGLU、参数量复算 |
+| week6/rope.py | RoPE 旋转位置编码 |
+| week6/gqa.py | KV Cache 与 GQA：显存与并发估算 |
 
 ## 运行
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install openai mcp
+pip install openai mcp numpy torch transformers   # 第 5 周起用到后三个
 export DEEPSEEK_API_KEY="sk-..."   # 不要把 Key 写进代码
 python week1/chat.py
 ```
