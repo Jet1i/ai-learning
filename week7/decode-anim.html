@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>动画：decode 时一行切段、最后合并</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--card:#fff;--line:#e5e2db;--old:#efede8;--done:#d1fae5}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#3a3c41;--old:#2a2c30;--done:#14532d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:2px 0 4px}
+.note{color:var(--mute);font-size:13px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:#2563eb;color:#fff;border-color:#2563eb}
+.explain{background:var(--card);border:1px solid var(--line);border-left:5px solid #9333ea;border-radius:10px;padding:10px 14px;margin:8px 0}
+.main{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.gridwrap{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px}
+table.g{border-collapse:collapse}
+table.g th{font-size:11px;color:var(--mute);font-weight:500;padding:2px 3px;width:40px}
+table.g td{width:40px;height:30px;border:1px solid var(--line);text-align:center;font-size:11px;transition:background .25s}
+td.old{background:var(--old)}
+td.mask{background:repeating-linear-gradient(45deg,var(--old) 0 4px,transparent 4px 8px)}
+td.seg0{box-shadow:inset 0 -4px 0 #2563eb}td.seg1{box-shadow:inset 0 -4px 0 #ea580c}td.seg2{box-shadow:inset 0 -4px 0 #16a34a}
+td.cur0{background:#bfdbfe;color:#1e3a8a;font-weight:700}td.cur1{background:#fed7aa;color:#7c2d12;font-weight:700}td.cur2{background:#bbf7d0;color:#14532d;font-weight:700}
+td.done{background:var(--done);color:var(--mute)}
+.side{flex:1;min-width:300px}
+.w{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin-bottom:8px}
+.w .hd{font-weight:600}
+.nb{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap}
+.nb div{border:1.5px solid var(--line);border-radius:8px;padding:2px 10px;text-align:center;font-variant-numeric:tabular-nums;min-width:70px}
+.nb div.ch{border-color:#c2410c;background:#fef3c7}
+@media (prefers-color-scheme:dark){.nb div.ch{background:#4a3a10}}
+.nb small{display:block;color:var(--mute);font-size:11px}
+.ev{font-size:13px;margin-top:4px}
+.merge{background:var(--card);border:2px solid #9333ea;border-radius:12px;padding:10px 14px;margin-top:4px;font-variant-numeric:tabular-nums}
+</style></head><body><div class="wrap">
+<h1>动画：decode —— 只有一行，切成几段分给工人，最后合并</h1>
+<p class="note">提示词 8 个 token 已经 prefill 完（灰色区域，K/V 在缓存里，不再计算）。现在生成第 9 个 token：只有<b>最后一行 q9</b> 要算，它要看 k1~k9 全部 9 个。为了看清补救，这里每个工人的桌子一次只放 1 个 token 的 k、v。v 简化成一个数：10, 20, …, 90。</p>
+<div class="ctrl"><button class="pri" id="play">▶ 播放</button><button id="step">走一步</button><button id="reset">重来</button><span class="note" id="tk"></span></div>
+<div class="explain" id="ex"></div>
+<div class="main">
+<div class="gridwrap"><table class="g" id="g"></table><div class="note" style="margin-top:6px">底线颜色 = 这一格归哪个工人：<span style="color:#2563eb">■ 工人1</span> <span style="color:#ea580c">■ 工人2</span> <span style="color:#16a34a">■ 工人3</span></div></div>
+<div class="side"><div id="ws"></div><div class="merge" id="mg"></div></div>
+</div></div>
+<script>
+const S=[1,3,0.5,4,2,2.5,1.5,3.5,0],V=[10,20,30,40,50,60,70,80,90];
+const SEG=[[0,1,2],[3,4,5],[6,7,8]],COL=['#2563eb','#ea580c','#16a34a'];
+const f=(x,n=3)=>x.toFixed(n);const $=id=>document.getElementById(id);
+let t,W,timer=null;
+function init(){t=0;W=SEG.map(()=>({m:-Infinity,l:0,o:0,ev:'等待开始',ch:[]}));render()}
+function step(){if(t>=5){stop();return}t++;
+ if(t<=3){SEG.forEach((seg,w)=>{const j=seg[t-1],s=S[j];const st=W[w];const mn=Math.max(st.m,s),sc=Math.exp(st.m-mn),e=Math.exp(s-mn);
+  const ev=[];ev.push(`搬上 k${j+1}、v${j+1}：分数 q9·k${j+1} = ${s}`);
+  if(st.m===-Infinity)ev.push('第一个，m = '+s);else if(mn>st.m)ev.push(`<b style="color:#c2410c">更大了！m ${st.m} → ${mn}，旧的 l、o × e^(${st.m}−${mn}) = ${f(sc)}（补救）</b>`);else ev.push(`m 不变（${st.m}），不用补救`);
+  st.l=st.l*sc+e;st.o=st.o*sc+e*V[j];st.m=mn;ev.push(`取 e = ${f(e)}，l = ${f(st.l)}，o = ${f(st.o,2)}`);st.ev=ev.join('<br>');st.ch=['m','l','o']})}
+ else if(t===4){W.forEach(st=>{st.ev='算完自己这一段，把 (m, l, o) 交出来，<b>自己不除</b>（只看到 1/3 行，l 不是整行总和）';st.ch=[]})}
+ else{W.forEach(st=>st.ev='已交出 ✅')}
+ render()}
+function render(){
+ // grid
+ let h='<tr><th></th>'+Array.from({length:9},(_,c)=>`<th>k${c+1}</th>`).join('')+'</tr>';
+ for(let r=0;r<9;r++){h+=`<tr><th>q${r+1}</th>`;for(let c=0;c<9;c++){
+  if(r<8){h+=`<td class="${c>r?'mask':'old'}"></td>`;continue}
+  const w=SEG.findIndex(s=>s.includes(c)),pos=SEG[w].indexOf(c);let cls='seg'+w,txt='';
+  if(t>=1&&t<=3&&pos===t-1){cls+=' cur'+w;txt=S[c]}else if(pos<Math.min(t,3)){cls+=' done';txt=S[c]}
+  h+=`<td class="${cls}">${txt}</td>`}h+='</tr>'}
+ $('g').innerHTML=h;
+ // workers
+ $('ws').innerHTML=W.map((st,w)=>{const seg=SEG[w];const cur=t>=1&&t<=3?seg[t-1]:null;
+  return `<div class="w" style="border-left:5px solid ${COL[w]}"><div class="hd" style="color:${COL[w]}">工人 ${w+1}：负责 k${seg[0]+1}~k${seg[2]+1}　<span class="note">桌上：q9${cur!==null?` + k${cur+1}、v${cur+1}`:''}</span></div>
+  <div class="nb"><div class="${st.ch.includes('m')?'ch':''}"><small>m</small>${st.m===-Infinity?'−∞':st.m}</div><div class="${st.ch.includes('l')?'ch':''}"><small>l</small>${f(st.l)}</div><div class="${st.ch.includes('o')?'ch':''}"><small>o</small>${f(st.o,2)}</div></div><div class="ev">${st.ev}</div></div>`}).join('');
+ // merge
+ if(t<4){$('mg').innerHTML='<b>合并区</b><div class="note">等三个工人都算完自己那段……（三个工人是<b>同时</b>在算的，谁也不等谁）</div>'}
+ else{const M=Math.max(...W.map(s=>s.m)),a=W.map(s=>Math.exp(s.m-M)),L=W.reduce((x,s,i)=>x+s.l*a[i],0),O=W.reduce((x,s,i)=>x+s.o*a[i],0);
+  const ex=S.map(s=>Math.exp(s-Math.max(...S))),sum=ex.reduce((x,y)=>x+y),ref=ex.reduce((x,e,i)=>x+e*V[i],0)/sum;
+  $('mg').innerHTML=`<b>合并区</b>（用的还是补救公式：先统一到同一把尺子，再分母加分母、分子加分子）<br>
+  全局最大 m = max(${W.map(s=>s.m).join(', ')}) = <b>${M}</b><br>
+  换算系数 e^(m自己 − ${M}) = ${a.map(x=>f(x)).join('、')}<br>
+  l = ${W.map((s,i)=>`${f(s.l)}×${f(a[i])}`).join(' + ')} = <b>${f(L)}</b><br>
+  o = ${W.map((s,i)=>`${f(s.o,2)}×${f(a[i])}`).join(' + ')} = <b>${f(O,2)}</b><br>
+  ${t>=5?`输出 = o ÷ l = <b style="font-size:18px">${f(O/L,2)}</b>　✅ 和直接对 9 个分数做普通 softmax 的 ${f(ref,2)} 一样<br><span class="note">写回显存 → 乘 Wo → FFN → 下一层……32 层都这样，最后吐出第 9 个 token。</span>`:'<span class="note">下一步：最后除一次</span>'}`}
+ const EX=['点"走一步"开始。三个工人各拿一份 q9，分别负责这一行的三段（看每格的底线颜色）。',
+  '第 1 轮：三个工人<b>同时</b>各搬自己那段的第 1 个 k、v，算出分数，记进自己的记事本。',
+  '第 2 轮：再各搬一个。注意工人 1：新分数 3 比之前的 1 大 → 自己内部<b>补救</b>一下。',
+  '第 3 轮：各搬最后一个。工人 3 之前在第 2 轮也补救过一次（1.5 → 3.5）。',
+  '三段都算完了。每个工人只看到 1/3 行，所以<b>不能自己除</b>，把 (m, l, o) 交到合并区。',
+  '<b>合并</b>：统一最大值、分母加分母、分子加分子，最后除一次。和 prefill 的区别：prefill 每一行只有一个工人从头走到尾，所以只有内部补救、不需要这一步。'];
+ $('ex').innerHTML=EX[t];$('tk').textContent=`第 ${t} 步 / 5`}
+function play(){if(timer){stop();return}$('play').textContent='⏸ 暂停';timer=setInterval(step,1800)}
+function stop(){clearInterval(timer);timer=null;$('play').textContent='▶ 播放'}
+$('play').onclick=play;$('step').onclick=()=>{stop();step()};$('reset').onclick=()=>{stop();init()};init();
+</script></body></html>

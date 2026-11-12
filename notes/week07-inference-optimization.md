@@ -67,6 +67,7 @@ q = np.clip(np.round(g / scale), -qmax, qmax)
 - [从输入到第一个词：prefill 全过程（真实数字）](../week7/prefill-walkthrough.html) · https://claude.ai/artifact/2jwhZAXTE3qWFVNA7rWFL6
 - [FlashAttention 拆到最细：只看一行](../week7/flash-one-row.html) · https://claude.ai/artifact/BtrJFR2bGJX88zPLNJZRi6 ← **最推荐先看这个**
 - [动画：竖着切、往右走](../week7/flash-tiles-anim.html) · https://claude.ai/artifact/SGUv7cpAp665dNjNJQr5se
+- [动画：decode 一行切段、最后合并](../week7/decode-anim.html) · https://claude.ai/artifact/TSp1SJzKYxJnUPUGi6LCLG （和上一个对照看：prefill 只补救，decode 补救 + 合并）
 - [vLLM 酒店：预留整段 vs 分页](../week7/paged-hotel.html) · https://claude.ai/artifact/T8Ae6Mfq7t2eUvEyLnNeXb
 - [连续批处理 + chunked prefill](../week7/batching-demo.html) · https://claude.ai/artifact/4fth3B2w61ME7i98UcTMLP
 - [量化：把权重吸到刻度上](../week7/quant-demo.html) · https://claude.ai/artifact/WrAtr9WfdrsuRMBUZQaS5B
