@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>屋顶线：为什么推理是搬运受限</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--acc:#c2410c;--blue:#2563eb;--green:#15803d;--card:#fff;--line:#e5e2db}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#33353a;--acc:#fb923c;--blue:#60a5fa;--green:#4ade80}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:4px 0}h2{font-size:17px;margin:22px 0 6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
+.row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.stat{flex:1;min-width:150px}.stat b{display:block;font-size:22px}.stat span{color:var(--mute);font-size:13px}
+select,input[type=range]{font:inherit}input[type=range]{width:100%}
+svg text{fill:var(--mute);font-size:11px}
+.bar{height:22px;border-radius:6px;background:var(--line);overflow:hidden;display:flex}
+.bar div{height:100%;transition:width .3s}
+.note{color:var(--mute);font-size:13px}
+.pipe{display:flex;align-items:center;gap:8px;font-size:13px}
+.box{border:1px solid var(--line);border-radius:8px;padding:8px 10px;text-align:center;min-width:90px}
+.lane{flex:1;height:28px;position:relative;background:repeating-linear-gradient(90deg,var(--line) 0 2px,transparent 2px 14px);border-radius:6px;overflow:hidden}
+.pk{position:absolute;top:5px;width:18px;height:18px;border-radius:4px;background:var(--blue)}
+</style></head><body><div class="wrap">
+<h1>屋顶线（Roofline）：GPU 到底卡在哪</h1>
+<p class="note">锚定 wx+b：生成 1 个 token，每个参数 w 要从显存搬到计算单元一次（fp16 = 2 字节），做 1 乘 1 加（2 FLOP）。一次搬运能被几个 token 共用，就是 batch。</p>
+
+<div class="card">
+<div class="row">
+ <label>GPU <select id="gpu"></select></label>
+ <label>模型 <select id="model"><option value="7">7B</option><option value="13">13B</option><option value="70">70B</option></select></label>
+ <label>精度 <select id="prec"><option value="2">fp16（2 字节）</option><option value="1">int8（1 字节）</option><option value="0.5">int4（0.5 字节）</option></select></label>
+</div>
+<div style="margin-top:10px">batch（同时生成的 token 数）：<b id="bv"></b>
+<input type="range" id="batch" min="0" max="10" step="1" value="0"></div>
+</div>
+
+<div class="card">
+<svg id="plot" viewBox="0 0 800 330" width="100%"></svg>
+<p class="note">横轴：算术强度 = 每搬 1 字节做几次运算（log）。纵轴：实际能用到的算力（log）。斜坡段 = 被带宽卡住；平顶 = 被算力卡住；拐点叫<b>屋脊点</b>。</p>
+</div>
+
+<div class="card">
+<div class="row">
+ <div class="stat"><b id="lat"></b><span>每一步耗时（所有 token 一起出）</span></div>
+ <div class="stat"><b id="tps1"></b><span>每个用户看到的速度</span></div>
+ <div class="stat"><b id="tps"></b><span>整张卡总吞吐</span></div>
+ <div class="stat"><b id="util"></b><span>算力利用率</span></div>
+</div>
+<div style="margin-top:10px" class="note">一步的时间花在哪：<span style="color:var(--blue)">■ 搬权重</span> vs <span style="color:var(--acc)">■ 计算</span>（取较大者，两件事可以重叠）</div>
+<div class="bar"><div id="bm" style="background:var(--blue)"></div><div id="bc" style="background:var(--acc)"></div></div>
+<p id="verdict" style="margin:10px 0 0"></p>
+</div>
+
+<div class="card">
+<div class="pipe"><div class="box">显存 HBM<br><span class="note" id="hbm"></span></div>
+<div class="lane" id="lane"></div>
+<div class="box">计算单元<br><span class="note" id="tf"></span></div></div>
+<p class="note">蓝块 = 权重在路上。batch=1 时计算单元大部分时间在等货；batch 变大，同一车货被更多 token 用。</p>
+</div>
+
+<h2>记住三个数</h2>
+<div class="card note" style="color:var(--fg)">
+① A100 屋脊点约 <b>156 FLOP/字节</b>：batch 小于约 150，都是搬运受限。<br>
+② 7B fp16 单路上限 ≈ 带宽 ÷ 权重大小 = 2000 GB/s ÷ 14 GB ≈ <b>143 token/s</b>（实际 70~100）。<br>
+③ 所以推理优化的三条路：<b>少搬</b>（量化，L4）、<b>多人共用一次搬运</b>（batching，L3 vLLM）、<b>中间结果不落显存</b>（FlashAttention，L2）。
+</div>
+<p class="note">简化：只算权重，没算 KV Cache 的读取（注意力那部分每个请求读自己的 KV，batch 再大也共用不了，长上下文时它会变成主角）。</p>
+</div>
+<script>
+const GPU={"A100 80GB":{tf:312,bw:2.0},"H100 SXM":{tf:989,bw:3.35},"RTX 4090":{tf:165,bw:1.0},"Mac M2 Max（参考）":{tf:27,bw:0.4}};
+const $=id=>document.getElementById(id);
+for(const k in GPU)$('gpu').add(new Option(k,k));
+const W=800,H=330,L=60,R=780,T=20,B=290;
+const xmin=Math.log10(0.25),xmax=Math.log10(4096),ymin=Math.log10(0.1),ymax=Math.log10(2000);
+const sx=v=>L+(Math.log10(v)-xmin)/(xmax-xmin)*(R-L), sy=v=>B-(Math.log10(v)-ymin)/(ymax-ymin)*(B-T);
+function fmt(t){return t>=1000?(t/1000).toFixed(1)+'k':t>=10?t.toFixed(0):t.toFixed(1)}
+let state={};
+function draw(){
+ const g=GPU[$('gpu').value],N=+$('model').value*1e9,bpw=+$('prec').value,b=2**(+$('batch').value);
+ $('bv').textContent=b;
+ const ridge=g.tf*1e12/(g.bw*1e12);
+ const I=2*b/bpw; // FLOP per byte of weights
+ const perf=Math.min(g.tf,g.bw*I); // TFLOPS
+ const tMem=N*bpw/(g.bw*1e12), tCmp=2*N*b/(g.tf*1e12), t=Math.max(tMem,tCmp);
+ let s=`<line x1="${L}" y1="${B}" x2="${R}" y2="${B}" stroke="currentColor" opacity=".3"/><line x1="${L}" y1="${T}" x2="${L}" y2="${B}" stroke="currentColor" opacity=".3"/>`;
+ [0.25,1,4,16,64,256,1024,4096].forEach(v=>s+=`<text x="${sx(v)}" y="${B+16}" text-anchor="middle">${v}</text>`);
+ [0.1,1,10,100,1000].forEach(v=>s+=`<text x="${L-6}" y="${sy(v)+4}" text-anchor="end">${v}</text><line x1="${L}" x2="${R}" y1="${sy(v)}" y2="${sy(v)}" stroke="currentColor" opacity=".07"/>`);
+ s+=`<text x="${(L+R)/2}" y="${B+32}" text-anchor="middle">算术强度 FLOP/字节</text><text x="14" y="${(T+B)/2}" transform="rotate(-90 14 ${(T+B)/2})" text-anchor="middle">TFLOPS</text>`;
+ const x0=0.25,x1=Math.min(ridge,4096);
+ s+=`<polyline fill="none" stroke="var(--blue)" stroke-width="3" points="${sx(x0)},${sy(g.bw*x0)} ${sx(x1)},${sy(g.tf)} ${sx(4096)},${sy(g.tf)}"/>`;
+ s+=`<line x1="${sx(ridge)}" x2="${sx(ridge)}" y1="${sy(g.tf)}" y2="${B}" stroke="var(--blue)" stroke-dasharray="4 4" opacity=".6"/><text x="${sx(ridge)+4}" y="${sy(g.tf)-6}">屋脊点 ${ridge.toFixed(0)}</text>`;
+ s+=`<circle cx="${sx(I)}" cy="${sy(perf)}" r="8" fill="var(--acc)"/><text x="${sx(I)+10}" y="${sy(perf)+16}" style="fill:var(--acc);font-weight:600">你在这 (batch ${b})</text>`;
+ $('plot').innerHTML=s;
+ $('lat').textContent=(t*1e3).toFixed(2)+' ms';
+ $('tps1').textContent=fmt(1/t)+' token/s';
+ $('tps').textContent=fmt(b/t)+' token/s';
+ $('util').textContent=(perf/g.tf*100).toFixed(1)+'%';
+ $('bm').style.width=(tMem/(tMem+tCmp)*100)+'%';$('bc').style.width=(tCmp/(tMem+tCmp)*100)+'%';
+ $('verdict').innerHTML=I<ridge?`<b style="color:var(--blue)">搬运受限</b>：强度 ${I.toFixed(1)} < 屋脊点 ${ridge.toFixed(0)}。再加 batch，每步几乎不变慢，总吞吐几乎白涨。`:`<b style="color:var(--acc)">算力受限</b>：强度 ${I.toFixed(0)} ≥ 屋脊点。再加 batch，每步会跟着变慢，每个用户速度下降。`;
+ $('hbm').textContent=g.bw+' TB/s';$('tf').textContent=g.tf+' TFLOPS';
+ state={util:perf/g.tf};
+}
+['gpu','model','prec','batch'].forEach(id=>$(id).oninput=draw);draw();
+// conveyor animation
+const lane=$('lane');let pk=[],last=0,acc=0;
+function tick(ts){const dt=Math.min(50,ts-last);last=ts;acc+=dt;
+ if(acc>260){acc=0;const d=document.createElement('div');d.className='pk';d.style.left='-20px';lane.appendChild(d);pk.push({el:d,x:-20});}
+ const w=lane.clientWidth;pk=pk.filter(p=>{p.x+=dt*0.12;p.el.style.left=p.x+'px';if(p.x>w){p.el.remove();return false}return true});
+ lane.style.boxShadow=`inset -${Math.round(40*state.util)+4}px 0 0 var(--acc)`;
+ requestAnimationFrame(tick)}
+requestAnimationFrame(tick);
+</script></body></html>

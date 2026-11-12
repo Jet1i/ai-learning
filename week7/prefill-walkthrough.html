@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>从输入到第一个词：prefill 全过程（带真实数字）</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--card:#fff;--line:#e5e2db;--acc:#c2410c;--blue:#2563eb;--hl:#fef3c7;--hl2:#dbeafe;--mask:#efede8}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#3a3c41;--acc:#fb923c;--blue:#60a5fa;--hl:#4a3a10;--hl2:#1e3a5f;--mask:#2c2e32}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.65 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:2px 0 4px}
+.note{color:var(--mute);font-size:13px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5;border-bottom:1px solid var(--line)}
+button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:#2563eb;color:#fff;border-color:#2563eb}
+button:disabled{opacity:.4}
+.dots{display:flex;gap:4px;flex-wrap:wrap}.dot{min-width:22px;height:22px;border-radius:11px;border:1px solid var(--line);font-size:11px;display:grid;place-items:center;cursor:pointer;padding:0 4px}
+.dot.on{background:#2563eb;color:#fff;border-color:#2563eb}
+.map{display:flex;flex-wrap:wrap;gap:4px;margin:10px 0;font-size:12px}
+.map span{padding:2px 8px;border-radius:10px;border:1px solid var(--line);color:var(--mute)}
+.map span.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.explain{background:var(--card);border:1px solid var(--line);border-left:5px solid #2563eb;border-radius:10px;padding:12px 16px;margin:10px 0}
+.explain h3{margin:0 0 6px;font-size:18px}
+.vis{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:10px 0;overflow-x:auto}
+.flex{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+table.mt{border-collapse:separate;border-spacing:2px;font-size:13px;font-variant-numeric:tabular-nums}
+table.mt td,table.mt th{padding:3px 7px;text-align:center;border-radius:4px;min-width:44px}
+table.mt td{background:var(--bg);border:1px solid var(--line)}
+table.mt th{color:var(--mute);font-weight:500;font-size:12px}
+table.mt td.hl{background:var(--hl)}table.mt td.hl2{background:var(--hl2)}
+table.mt td.mask{background:repeating-linear-gradient(45deg,var(--mask) 0 4px,transparent 4px 8px);color:var(--mute)}
+.cap{font-size:13px;font-weight:600;margin-bottom:2px}
+.where{display:inline-block;font-size:11px;padding:0 6px;border-radius:4px;margin-left:4px;font-weight:500;vertical-align:middle}
+.hbm{background:#e0e7ff;color:#3730a3}.sram{background:#dcfce7;color:#166534}
+@media (prefers-color-scheme:dark){.hbm{background:#312e81;color:#e0e7ff}.sram{background:#14532d;color:#dcfce7}}
+.op{font-size:22px;color:var(--mute);align-self:center}
+.box{border:1px dashed var(--line);border-radius:10px;padding:10px}
+.worker{border:2px solid var(--blue);border-radius:12px;padding:10px;flex:1;min-width:280px}
+.calc{font-family:ui-monospace,Menlo,monospace;font-size:13px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;white-space:pre-wrap;line-height:1.6}
+.bar{display:flex;align-items:center;gap:6px;font-size:13px;margin:2px 0}
+.bar div.b{height:16px;background:var(--blue);border-radius:3px}
+.big{font-size:26px;font-weight:700}
+.tok{display:inline-block;border:1px solid var(--line);border-radius:6px;padding:2px 10px;margin:2px;background:var(--bg)}
+.tok b{color:var(--acc)}
+</style></head><body><div class="wrap">
+<h1>从输入到第一个词：prefill 全过程</h1>
+<p class="note">迷你模型：词表 8 个词，每个向量 4 维（真实 4096），1 个头（真实 32 个），2 层（真实 32 层）。权重是随机生成的，所有数字都是真的算出来的。只有最后输出层被手动调过一下，让它说出一个像样的词（相当于"假装训练过"）。</p>
+<div class="ctrl"><button id="prev">← 上一步</button><button class="pri" id="next">下一步 →</button><div class="dots" id="dots"></div></div>
+<div class="map" id="map"></div>
+<div class="explain" id="ex"></div>
+<div class="vis" id="vis"></div>
+</div>
+<script>
+// ---------- tiny model ----------
+function rng(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const R=rng(7);const randn=()=>{let u=0,v=0;while(!u)u=R();while(!v)v=R();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)};
+const mk=(r,c,s=1)=>Array.from({length:r},()=>Array.from({length:c},()=>+(randn()*s).toFixed(2)));
+const mm=(A,B)=>A.map(r=>B[0].map((_,j)=>r.reduce((s,x,k)=>s+x*B[k][j],0)));
+const add=(A,B)=>A.map((r,i)=>r.map((x,j)=>x+B[i][j]));
+const T_=A=>A[0].map((_,j)=>A.map(r=>r[j]));
+const rms=A=>A.map(r=>{const s=Math.sqrt(r.reduce((a,x)=>a+x*x,0)/r.length+1e-5);return r.map(x=>x/s)});
+const silu=x=>x/(1+Math.exp(-x));
+const VOC=['今天','我','想','吃','苹果','米饭','。','你'];
+const ids=[0,1,2,3],TOK=ids.map(i=>VOC[i]);const T=4,D=4;
+const E=mk(8,D,1);
+const X0=ids.map(i=>E[i].slice());
+const layers=[];let X=X0;
+for(let l=0;l<2;l++){
+ const W={q:mk(D,D,.6),k:mk(D,D,.6),v:mk(D,D,.6),o:mk(D,D,.5),g:mk(D,8,.5),u:mk(D,8,.5),d:mk(8,D,.4)};
+ const H=rms(X),Q=mm(H,W.q),K=mm(H,W.k),V=mm(H,W.v);
+ const S=Q.map((q,i)=>K.map((k,j)=>j>i?null:q.reduce((s,x,t)=>s+x*k[t],0)/Math.sqrt(D)));
+ const P=S.map(r=>{const m=Math.max(...r.filter(x=>x!==null));const e=r.map(x=>x===null?0:Math.exp(x-m));const s=e.reduce((a,b)=>a+b);return e.map(x=>x/s)});
+ const A=mm(P,V),AO=mm(A,W.o),X1=add(X,AO),H2=rms(X1);
+ const G=mm(H2,W.g),U=mm(H2,W.u),GU=G.map((r,i)=>r.map((x,j)=>silu(x)*U[i][j])),F=mm(GU,W.d),X2=add(X1,F);
+ layers.push({W,Xin:X,H,Q,K,V,S,P,A,AO,X1,H2,F,X2});X=X2;
+}
+const XL=X;const hf=rms([XL[3]])[0];
+const Wout=mk(D,8,.5);for(let i=0;i<D;i++)Wout[i][4]=+(hf[i]*0.9).toFixed(2); // "trained" column for 苹果
+const logits=[hf].map(r=>Wout[0].map((_,j)=>r.reduce((s,x,k)=>s+x*Wout[k][j],0)))[0];
+const lm=Math.max(...logits),le=logits.map(x=>Math.exp(x-lm)),ls=le.reduce((a,b)=>a+b),prob=le.map(x=>x/ls);
+const best=prob.indexOf(Math.max(...prob));
+// flash detail for row index r over blocks
+function flashRow(L,r){const blocks=[[0,1],[2,3]];let m=-Infinity,l=0,o=[0,0,0,0];const log=[];
+ blocks.forEach((b,bi)=>{const cols=b.filter(j=>j<=r);if(!cols.length){log.push({bi,skip:true});return}
+  const s=cols.map(j=>L.S[r][j]);const mb=Math.max(...s);const mn=Math.max(m,mb);const sc=Math.exp(m-mn);
+  const e=s.map(x=>Math.exp(x-mn));const lOld=l,oOld=o.slice();
+  l=l*sc+e.reduce((a,b)=>a+b);o=o.map((x,t)=>x*sc+cols.reduce((acc,j,ci)=>acc+e[ci]*L.V[j][t],0));
+  log.push({bi,cols,s,mOld:m,m:mn,sc,e,lOld,l,oOld,o:o.slice()});m=mn});
+ return{log,out:o.map(x=>x/l),l,o}}
+
+// ---------- rendering helpers ----------
+const f=(x,n=2)=>x===null?'✕':(Math.abs(x)<0.005?'0.00':x.toFixed(n));
+function mat(M,{cap='',where='',rows=null,cols=null,hl=[],hl2=[],hlCols=[],n=2}={}){
+ let h=`<div><div class="cap">${cap}${where?`<span class="where ${where}">${where=='hbm'?'📦 HBM 显存':'🔧 SRAM'}</span>`:''}</div><table class="mt">`;
+ if(cols)h+='<tr><th></th>'+cols.map(c=>`<th>${c}</th>`).join('')+'</tr>';
+ M.forEach((r,i)=>{h+=`<tr>${rows?`<th>${rows[i]}</th>`:''}`+r.map((x,j)=>`<td class="${x===null?'mask':''} ${hl.includes(i)||hlCols.includes(j)?'hl':''} ${hl2.includes(i)?'hl2':''}">${f(x,n)}</td>`).join('')+'</tr>'});
+ return h+'</table></div>'}
+const vec=v=>'['+v.map(x=>f(x)).join(', ')+']';
+const tk=TOK.map((t,i)=>`t${i+1} ${t}`);
+
+const MAP=['文字→编号','查词向量','第1层：归一化','算 q k v','分数表','Flash 分工','工人1','工人2 逐块+补救','拼回 O','乘 Wo+残差','FFN','第2层','最后一个 token','概率→第一个词','小结'];
+const L1=layers[0],L2=layers[1];
+const fr2=flashRow(L1,2),fr3=flashRow(L1,3),fr0=flashRow(L1,0),fr1=flashRow(L1,1);
+function flashLogHTML(fr,r){let h='';fr.log.forEach(g=>{
+ if(g.skip){h+=`<div class="calc">K/V 块 ${g.bi+1}（token ${g.bi*2+1}、${g.bi*2+2}）：全是 t${r+1} 的未来 → <b>整块跳过</b></div>`;return}
+ h+=`<div class="calc"><b>搬上 K/V 块 ${g.bi+1}</b>（token ${g.cols.map(j=>j+1).join('、')}${g.bi*2+1<=r&&r<g.bi*2+1+1?'':''}）
+分数 = q${r+1}·k / √4 = ${g.s.map(x=>f(x,3)).join('、')}
+m：${g.mOld===-Infinity?'−∞':f(g.mOld,3)} → <b>${f(g.m,3)}</b>　补救系数 e^(m旧−m新) = ${g.mOld===-Infinity?'（第一块，无旧值）':'<b>'+f(g.sc,3)+'</b>'}
+取 e：${g.e.map(x=>f(x,3)).join('、')}
+l = ${f(g.lOld,3)} × ${g.mOld===-Infinity?'0':f(g.sc,3)} + ${g.e.map(x=>f(x,3)).join(' + ')} = <b>${f(g.l,3)}</b>
+o = 旧o × 补救 + Σ e×v = <b>${vec(g.o)}</b>（还没除）</div>`});
+ h+=`<div class="calc">扫完整行 → 输出 = o ÷ l = ${vec(fr.o)} ÷ ${f(fr.l,3)} = <b>${vec(fr.out)}</b></div>`;return h}
+
+const steps=[
+{t:'第 0 步：文字 → token 编号',x:`你输入"今天我想吃"。分词器把它切成 4 个 token，查词表得到编号。模型只认数字，不认字。`,
+ v:()=>`<div>词表（8 个词）：${VOC.map((w,i)=>`<span class="tok">${i}: ${w}</span>`).join('')}</div><div style="margin-top:10px">输入："今天我想吃" → ${TOK.map((t,i)=>`<span class="tok"><b>${t}</b> → ${ids[i]}</span>`).join(' ')}</div>`},
+{t:'第 1 步：查表得到词向量 X',x:`词向量表 E 是模型参数（8 行 × 4 维，真实是 128256 × 4096），放在显存里。按编号取出 4 行，得到 X：<b>每个 token 一行、一个 4 维向量</b>。<br>后面所有计算，都是在加工这 4 行。`,
+ v:()=>`<div class="flex">${mat(E,{cap:'词向量表 E（参数）',where:'hbm',rows:VOC,hl:ids})}<div class="op">→</div>${mat(X0,{cap:'X（4 个 token 的向量）',where:'hbm',rows:tk})}</div>`},
+{t:'第 2 步：进入第 1 层，先做 RMSNorm',x:`每一行各自除以自己的均方根，把大小"稳压"到 1 附近（第 6 周学的）。得到 H。<br>（真实模型这里还会用 RoPE 旋转 q、k，为了简单这个例子省略。）`,
+ v:()=>`<div class="flex">${mat(L1.Xin,{cap:'X',where:'hbm',rows:tk})}<div class="op">→ RMSNorm →</div>${mat(L1.H,{cap:'H',where:'hbm',rows:tk})}</div>`},
+{t:'第 3 步：算 q、k、v（普通矩阵乘法）',x:`<b>token 不是"乘 q"，而是 token 的向量 h 乘三个参数矩阵，得到 q、k、v</b>：q = h @ Wq，k = h @ Wk，v = h @ Wv。<br>4 个 token 叠成矩阵一起乘（这就是 prefill：Wq 从显存搬一次，4 个 token 都用）。<br>结果写回显存：<b>K、V 存下来就是第 1 层的 KV Cache</b>；Q 只在这一层用一下。<br>例如 q4 = h4 @ Wq = ${vec(L1.Q[3])}。`,
+ v:()=>`<div class="flex">${mat(L1.H,{cap:'H',rows:tk})}<div class="op">@</div>${mat(L1.W.q,{cap:'Wq（参数）',where:'hbm'})}<div class="op">=</div>${mat(L1.Q,{cap:'Q',where:'hbm',rows:tk.map(t=>'q'+t.slice(1))})}</div>
+ <div class="flex" style="margin-top:12px">${mat(L1.K,{cap:'K = H @ Wk（→ KV Cache 第1层）',where:'hbm',rows:tk.map(t=>'k'+t.slice(1))})}${mat(L1.V,{cap:'V = H @ Wv（→ KV Cache 第1层）',where:'hbm',rows:tk.map(t=>'v'+t.slice(1))})}</div>`},
+{t:'第 4 步：分数表长什么样（概念上）',x:`每一格 = 某个 q 和某个 k 的点积 ÷ √4。<b>行 = 谁在看（query），列 = 被看的（key）</b>。右上角 ✕ 是因果遮罩：不能看未来。<br>⭐ <b>softmax 是一行一行做的</b>：第 3 行只管 q3 对 k1、k2、k3 的三个分数，和别的行毫无关系。<br>普通注意力会把这整张表写进显存；Flash 不写，下面看它怎么算。`,
+ v:()=>`<div class="flex">${mat(L1.S,{cap:'分数表 S = Q·Kᵀ / √4（Flash 不会真的存它）',rows:tk.map(t=>'q'+t.slice(1)),cols:['k1','k2','k3','k4'],n:3})}<div class="op">→ 每行 softmax →</div>${mat(L1.P,{cap:'权重 P（每行加起来 = 1）',rows:tk.map(t=>'q'+t.slice(1)),cols:['k1','k2','k3','k4'],n:3})}</div>`},
+{t:'第 5 步：Flash 怎么分工（prefill 按行分）',x:`假设 GPU 有 2 个工人，每张桌子（SRAM）一次只放得下 2 个 token 的 k、v。<br>• <b>工人 1 领第 1、2 行</b>（q1、q2），<b>工人 2 领第 3、4 行</b>（q3、q4）<br>• K、V 切成 2 块：块 1 = token 1、2；块 2 = token 3、4<br>• 每个工人<b>自己</b>把需要的 K/V 块从左到右一块块搬上桌，所以自己那几行的每一格都是自己算的 → <b>工人之间不用合并</b>。`,
+ v:()=>`<div class="flex">${mat(L1.S,{cap:'工人 1 = 黄色两行，工人 2 = 蓝色两行',rows:tk.map(t=>'q'+t.slice(1)),cols:['k1','k2','k3','k4'],hl:[0,1],hl2:[2,3],n:3})}<div class="box"><div class="cap">K/V 块</div>块 1：k1 v1、k2 v2<br>块 2：k3 v3、k4 v4<br><span class="note">工人 1：只需要块 1（块 2 是未来）<br>工人 2：块 1 → 块 2，依次扫</span></div></div>`},
+{t:'第 6 步：工人 1 算 q1、q2',x:`工人 1 把 q1、q2 搬上桌，再搬 K/V 块 1。块 2 对 token 1、2 全是未来，直接跳过。<br>只有一块，所以没有补救，扫完直接 o ÷ l。下面是 q2 那一行的完整计算：`,
+ v:()=>`<div class="worker"><div class="cap">工人 1 · 第 2 行（q2 = ${vec(L1.Q[1])}）<span class="where sram">🔧 SRAM</span></div>${flashLogHTML(fr1,1)}</div>`},
+{t:'第 7 步：工人 2 算 q3、q4（q4 这行有补救！）',x:`同时，工人 2 把 q3、q4 搬上桌，然后：<br><b>第 1 轮</b>搬 K/V 块 1（token 1、2）：算 q3·k1、q3·k2，记下 m、l、o。<br><b>第 2 轮</b>搬 K/V 块 2（token 3、4）：q3·k3 有效，q3·k4 是未来作废。如果新分数更大，旧的 l、o 先乘补救系数。<br>扫完整行，才除以 l。<br>• q3 这行：第 2 轮的新分数 1.773 比旧最大值 2.766 小，m 没变，补救系数 = 1（不用补救）<br>• q4 这行：第 2 轮出现了更大的分数，m 变大 → 旧的 l、o 乘 <b>0.116</b> 补救<br><b>同一个工人先后看完了第 3、4 行所有的格子</b>，所以它自己就能算出正确的 softmax，不用和工人 1 对数。`,
+ v:()=>`<div class="worker"><div class="cap">工人 2 · 第 3 行（q3 = ${vec(L1.Q[2])}）<span class="where sram">🔧 SRAM</span></div>${flashLogHTML(fr2,2)}
+ <div class="calc">✅ 对照：第 4 步权重表第 3 行 = [${L1.P[2].slice(0,3).map(x=>f(x,3)).join(', ')}]，加权 v 得 ${vec(L1.A[2])}，和 Flash 结果一样</div></div>
+ <div class="worker" style="margin-top:12px"><div class="cap">工人 2 · 第 4 行（q4 = ${vec(L1.Q[3])}）<span class="where sram">🔧 SRAM</span></div>${flashLogHTML(fr3,3)}
+ <div class="calc">✅ 对照：第 4 步权重表第 4 行 = [${L1.P[3].map(x=>f(x,3)).join(', ')}]，加权 v 得 ${vec(L1.A[3])}，和 Flash 结果一样</div></div>`},
+{t:'第 8 步：4 行输出拼成 O，写回显存',x:`工人 1 写回第 1、2 行，工人 2 写回第 3、4 行（q4 那行和 q3 一样，扫块 1、块 2）。<br>整个过程中，显存里只读了 Q、K、V，只写了 O，<b>分数表从没进过显存</b>。<br>O 的每一行 = 这个 token "看了前面的词之后"拿到的信息。`,
+ v:()=>`<div class="flex">${mat(L1.A,{cap:'注意力输出 O',where:'hbm',rows:tk,hl:[0,1],hl2:[2,3]})}<div class="note" style="align-self:center">黄 ← 工人 1 写回<br>蓝 ← 工人 2 写回</div></div>`},
+{t:'第 9 步：乘 Wo，加回残差',x:`O @ Wo 把信息混一下，再<b>加回这一层的输入 X</b>（残差：原来的信息保留，加上新学到的）。`,
+ v:()=>`<div class="flex">${mat(L1.A,{cap:'O',rows:tk})}<div class="op">@ Wo =</div>${mat(L1.AO,{cap:'O@Wo',rows:tk})}<div class="op">+</div>${mat(L1.Xin,{cap:'X（残差）',rows:tk})}<div class="op">=</div>${mat(L1.X1,{cap:'X′',where:'hbm',rows:tk})}</div>`},
+{t:'第 10 步：FFN，再加残差 → 第 1 层结束',x:`RMSNorm → SwiGLU FFN（4 → 8 → 4，三个矩阵，普通矩阵乘法）→ 再加残差。<br>FFN 是<b>每个 token 各自</b>加工，token 之间不交流（交流只发生在注意力里）。<br>第 1 层输出 = 4 行新向量，作为第 2 层的输入。`,
+ v:()=>`<div class="flex">${mat(L1.X1,{cap:'X′',rows:tk})}<div class="op">+ FFN(·) =</div>${mat(L1.F,{cap:'FFN 输出',rows:tk})}<div class="op">→</div>${mat(L1.X2,{cap:'第 1 层输出',where:'hbm',rows:tk})}</div>`},
+{t:'第 11 步：第 2 层，完全重复第 2~10 步',x:`用<b>第 2 层自己的</b> Wq、Wk、Wv 算出新的 Q、K、V。<b>K、V 存成第 2 层的 KV Cache</b>（和第 1 层的分开存）。<br>Flash 照样分工、补救，然后 Wo、残差、FFN、残差。<br>真实模型这样重复 32 层，KV Cache 也就有 32 份（这就是 KV 公式里"× 层数"）。`,
+ v:()=>`<div class="flex">${mat(L2.Xin,{cap:'第 2 层输入',rows:tk})}<div class="op">→</div>${mat(L2.K,{cap:'K（KV Cache 第2层）',where:'hbm',rows:tk.map(t=>'k'+t.slice(1))})}${mat(L2.V,{cap:'V（KV Cache 第2层）',where:'hbm',rows:tk.map(t=>'v'+t.slice(1))})}<div class="op">→ … →</div>${mat(L2.X2,{cap:'第 2 层输出（最终）',where:'hbm',rows:tk,hl:[3]})}</div>`},
+{t:'第 12 步：只拿最后一个 token 的向量去预测',x:`要预测"吃"后面是什么，只需要<b>最后一行（t4 吃）</b>的向量。它经过 2 层注意力，已经"看过"了今天、我、想。<br>那前 3 行白算了吗？没有：它们在每一层提供了 k、v 给后面的 token 看，而且 <b>K、V 已经存进缓存</b>，后面生成时直接用。<br>最后一行 → RMSNorm → 乘输出矩阵 Wout（4 × 8，每个词一列）→ 8 个分数（logits）。`,
+ v:()=>`<div class="flex"><div><div class="cap">t4"吃"的最终向量（归一化后）</div><div class="calc">${vec(hf)}</div></div><div class="op">@</div>${mat(Wout,{cap:'Wout（每列一个词）',where:'hbm',cols:VOC,hlCols:[4]})}<div class="op">=</div>${mat([logits],{cap:'logits（每个词的分数）',cols:VOC,n:2})}</div>`},
+{t:'第 13 步：softmax → 概率 → 第一个输出词',x:`对 8 个分数做 softmax（又是 取 e → 求和 → 相除），得到每个词的概率。挑概率最大的（或者按 temperature 抽样）。<br>🎉 <b>prefill 结束，第一个词出来了</b>。从按回车到这里的时间 = <b>首字延迟 TTFT</b>。`,
+ v:()=>`${VOC.map((w,i)=>`<div class="bar"><span style="width:44px">${w}</span><div class="b" style="width:${prob[i]*400}px;${i==best?'background:var(--acc)':''}"></div><span>${(prob[i]*100).toFixed(1)}%</span></div>`).join('')}<div style="margin-top:10px">模型输出：<span class="big">"${VOC[best]}"</span></div>`},
+{t:'第 14 步：小结 + 接下来的 decode',x:`<b>prefill 做了什么</b>：4 个 token 一起，穿过 2 层；每层：归一化 → 算 q k v（K、V 存缓存）→ Flash 注意力（按行分工、每个工人自己扫完整行、有补救）→ Wo + 残差 → FFN + 残差。最后只用最后一行预测出第一个词。<br><br><b>接下来 decode</b>：把"${VOC[best]}"当第 5 个 token 输入，但这次<b>只有 1 行</b>：算出 q5、k5、v5，k5、v5 追加进每层缓存，q5 去和缓存里的 k1~k5 算分数（这时只有一行，才需要按列切给多个工人、最后合并，就是上一个图的第 10~13 步）。`,
+ v:()=>`<div class="flex"><div class="box"><div class="cap">KV Cache 里现在有</div>第 1 层：k1~k4、v1~v4<br>第 2 层：k1~k4、v1~v4<br><span class="note">每个 4 维 × 2 字节……真实模型：2 × 32 层 × 1024 × 2 字节 = 128 KB/token（LLaMA-3 8B）</span></div>
+ <div class="box"><div class="cap">prefill vs decode</div>prefill：很多行 → 按行分给工人，不用合并<br>decode：只有 1 行 → 按列切给工人，最后合并</div></div>`}
+];
+let cur=0;const $=id=>document.getElementById(id);
+function render(){const st=steps[cur];$('ex').innerHTML=`<h3>${st.t}</h3>${st.x}`;$('vis').innerHTML=st.v();
+ $('map').innerHTML=MAP.map((m,i)=>`<span class="${i==cur?'on':''}">${m}</span>`).join('→');
+ [...$('dots').children].forEach((d,i)=>d.classList.toggle('on',i==cur));$('prev').disabled=cur==0;$('next').disabled=cur==steps.length-1}
+steps.forEach((s,i)=>{const d=document.createElement('div');d.className='dot';d.textContent=i;d.onclick=()=>{cur=i;render()};$('dots').appendChild(d)});
+$('next').onclick=()=>{if(cur<steps.length-1){cur++;render();scrollTo(0,0)}};$('prev').onclick=()=>{if(cur>0){cur--;render()}};
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight')$('next').click();if(e.key==='ArrowLeft')$('prev').click()});
+render();
+</script></body></html>

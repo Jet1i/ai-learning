@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FlashAttention：分块 + online softmax</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--acc:#c2410c;--blue:#2563eb;--green:#15803d;--card:#fff;--line:#e5e2db;--hl:#fff3e0}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#33353a;--acc:#fb923c;--blue:#60a5fa;--green:#4ade80;--hl:#3a2a18}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:900px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:4px 0}h2{font-size:18px;margin:26px 0 6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
+.note{color:var(--mute);font-size:13px}
+button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:var(--blue);color:#fff;border-color:var(--blue)}
+table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
+td,th{border-bottom:1px solid var(--line);padding:5px 6px;text-align:center}
+tr.cur{background:var(--hl)}
+.chip{display:inline-block;padding:2px 8px;border-radius:6px;border:1px solid var(--line);margin:2px;min-width:34px;text-align:center}
+.chip.seen{border-color:var(--blue);color:var(--blue)}.chip.now{background:var(--blue);color:#fff}
+.grid{display:grid;gap:3px}
+.cell{aspect-ratio:1;border-radius:3px;background:var(--line);transition:background .15s}
+.cols{display:flex;gap:18px;flex-wrap:wrap}.cols>div{flex:1;min-width:260px}
+.meter{height:14px;background:var(--line);border-radius:7px;overflow:hidden}.meter div{height:100%;transition:width .2s}
+.big{font-size:20px;font-weight:600}
+.warn{color:var(--acc);font-weight:600}
+</style></head><body><div class="wrap">
+<h1>FlashAttention：结果一模一样，只是换了算的顺序</h1>
+<p class="note">接 L1 的"仓库（HBM）↔ 工作台（SRAM）"：普通注意力把 T×T 的分数表整张写进仓库再搬回来；FlashAttention 一块一块在工作台上算完，分数表从不进仓库。难点在 softmax：要除以"整行的总和"，可后面的块还没看到。</p>
+
+<h2>① 先看一维：online softmax</h2>
+<div class="card">
+<div>一行分数 s：<span id="chips"></span></div>
+<div>对应的 v：<span class="note">10, 20, 30, 40, 50, 60</span></div>
+<p class="note">普通做法：先看完全部 → <b>取 e → 求和 → 相除</b> → 加权平均。online 做法：一个一个看，只记 3 个数：<b>m</b>（目前最大分数）、<b>l</b>（目前 e 的和）、<b>o</b>（目前没除以总和的加权和）。最大值变了，就把旧的 l、o 乘 <b>e^(m旧−m新)</b> 补救。</p>
+<div style="margin:8px 0"><button class="pri" id="next">看下一个</button> <button id="reset">重来</button></div>
+<table><thead><tr><th>步</th><th>新分数</th><th>m</th><th>补救系数 e^(m旧−m新)</th><th>l</th><th>o</th><th>当前答案 o / l</th></tr></thead><tbody id="tb"></tbody></table>
+<p id="fin" style="margin:10px 0 0"></p>
+</div>
+
+<h2>② 再看矩阵：分数表放哪</h2>
+<div class="card">
+<div style="margin-bottom:8px"><button class="pri" id="play">▶ 播放</button> <span class="note">序列切成 8 块（每块代表 Bc 个 token）。每格 = 一块 Q × 一块 K 的分数。</span></div>
+<div class="cols">
+<div><b>普通注意力</b><div class="note">整张表写进 HBM，softmax 时读出来再写，乘 V 时再读</div>
+<div class="grid" id="g1" style="grid-template-columns:repeat(8,1fr);margin:8px 0"></div>
+<div class="note">HBM 读写量</div><div class="meter"><div id="m1" style="background:var(--acc);width:0"></div></div><div id="t1" class="note"></div></div>
+<div><b>FlashAttention</b><div class="note">一次只有一格在 SRAM 里算，用完就扔，只更新每行的 m、l、O</div>
+<div class="grid" id="g2" style="grid-template-columns:repeat(8,1fr);margin:8px 0"></div>
+<div class="note">HBM 读写量</div><div class="meter"><div id="m2" style="background:var(--blue);width:0"></div></div><div id="t2" class="note"></div></div>
+</div>
+</div>
+
+<h2>③ 长上下文时差多少</h2>
+<div class="card">
+序列长度 T：<b id="tv"></b><input type="range" id="T" min="11" max="17" value="15" style="width:100%">
+<div class="cols" style="margin-top:8px">
+<div><div class="note">普通：每个头的 T×T 分数表（fp16）</div><div class="big" id="sz1"></div><div class="note" id="sz1b"></div></div>
+<div><div class="note">Flash：只需一个 128×128 小块（SRAM 里）</div><div class="big">32 KB</div><div class="note">和 T 无关；显存只剩 Q K V O 本身，O(T)</div></div>
+</div>
+</div>
+
+<h2>记住</h2>
+<div class="card">
+1. <b>数学不变</b>：结果和普通注意力相同（误差 1e-16），计算量也还是约 4·T²·d。<br>
+2. <b>省的是搬运和显存</b>：T×T 表不进 HBM → 显存 O(T²) → O(T)，速度 2~4 倍，长上下文才跑得动。<br>
+3. <b>关键技巧</b>：online softmax，最大值变了乘 e^(m旧−m新) 补救，<b>最后统一除以 l</b>（还是 取 e → 求和 → 相除，只是"相除"挪到了最后）。<br>
+<span class="note">FlashAttention 2022（Tri Dao），现在 vLLM、PyTorch、各家推理框架默认都用。</span>
+</div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const s=[1,3,0.5,4,2,2.5],v=[10,20,30,40,50,60];
+let k=0,m=-Infinity,l=0,o=0;
+function chips(){ $('chips').innerHTML=s.map((x,i)=>`<span class="chip ${i<k-1?'seen':i==k-1?'now':''}">${x}</span>`).join('') }
+function step(){ if(k>=s.length)return; const mn=Math.max(m,s[k]),sc=Math.exp(m-mn);const e=Math.exp(s[k]-mn);
+ l=l*sc+e;o=o*sc+e*v[k];const changed=k>0&&mn>m;m=mn;k++;
+ [...$('tb').children].forEach(r=>r.classList.remove('cur'));
+ const tr=document.createElement('tr');tr.className='cur';
+ tr.innerHTML=`<td>${k}</td><td>${s[k-1]}</td><td>${m}</td><td>${k==1?'—':(changed?'<span class="warn">'+sc.toFixed(3)+' ← 最大值变了</span>':'1（没变）')}</td><td>${l.toFixed(4)}</td><td>${o.toFixed(3)}</td><td><b>${(o/l).toFixed(4)}</b></td>`;
+ $('tb').appendChild(tr);chips();
+ if(k==s.length){const mx=Math.max(...s),es=s.map(x=>Math.exp(x-mx)),S=es.reduce((a,b)=>a+b),w=es.map(x=>x/S);
+  $('fin').innerHTML=`普通 softmax：权重 = [${w.map(x=>x.toFixed(3)).join(', ')}]（和为 1），加权和 = <b>${w.reduce((a,x,i)=>a+x*v[i],0).toFixed(4)}</b>。和 online 最后一行<b>完全一样</b>。注意答案落在 10~60 之间，这是"除以总和"做对了的标志。`}}
+function reset(){k=0;m=-Infinity;l=0;o=0;$('tb').innerHTML='';$('fin').innerHTML='';chips()}
+$('next').onclick=step;$('reset').onclick=reset;reset();
+
+const N=8;const g1=$('g1'),g2=$('g2');
+for(let i=0;i<N*N;i++){g1.appendChild(Object.assign(document.createElement('div'),{className:'cell'}));g2.appendChild(Object.assign(document.createElement('div'),{className:'cell'}))}
+let timer=null;
+function play(){ if(timer)clearInterval(timer);
+ [...g1.children,...g2.children].forEach(c=>c.style.background='');
+ let t=0;const total=N*N;
+ // standard: write S (1), read+write P (2), read P (1) -> 4 passes of T^2 ; flash: read Q,K,V,write O ~ only O(T*d) per block-row
+ timer=setInterval(()=>{
+  const phase=Math.floor(t/total),idx=t%total;
+  if(phase==0){g1.children[idx].style.background='var(--acc)';}
+  else if(phase<3){g1.children[idx].style.background=phase==1?'#e88f5a':'var(--acc)';}
+  const i=Math.floor(t/N)%N,j=t%N;
+  if(t<total){[...g2.children].forEach(c=>c.style.background='');g2.children[i*N+j].style.background='var(--blue)';
+   for(let jj=0;jj<j;jj++)g2.children[i*N+jj].style.background='rgba(37,99,235,.15)';}
+  else [...g2.children].forEach(c=>c.style.background='');
+  const std=Math.min(t+1,3*total)/(3*total),fl=Math.min(t+1,total)/total;
+  $('m1').style.width=(std*100)+'%';$('m2').style.width=(fl*100*0.12)+'%';
+  $('t1').textContent=phase==0?'写 S（T×T）':phase==1?'读 S、写 P（softmax）':phase==2?'读 P，乘 V':'完成：T×T 表在 HBM 里走了 4 趟';
+  $('t2').textContent=t<total?`Q 第 ${i+1} 块 × K 第 ${j+1} 块（只在 SRAM），更新第 ${i+1} 块的 m、l、O`:'完成：只读了 Q K V、写了 O';
+  t++; if(t>=3*total){clearInterval(timer);timer=null}
+ },35)}
+$('play').onclick=play;
+
+function sz(){const T=2**+$('T').value;$('tv').textContent=T.toLocaleString();const b=T*T*2;
+ $('sz1').textContent=b>=2**30?(b/2**30).toFixed(0)+' GB':(b/2**20).toFixed(0)+' MB';
+ const all=b*32;$('sz1b').innerHTML=`一层 32 个头一起算 = ${all>=2**30?(all/2**30).toFixed(0)+' GB':(all/2**20).toFixed(0)+' MB'} ${all>80*2**30?'<span class="warn">（一张 80GB 卡装不下）</span>':''}`}
+$('T').oninput=sz;sz();
+</script></body></html>

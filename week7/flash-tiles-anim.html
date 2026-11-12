@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>动画：FlashAttention 竖着切、往右走</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--card:#fff;--line:#e5e2db;--w1:#2563eb;--w2:#ea580c;--done:#d1fae5;--mask:#efede8;--skip:#f3f4f6}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#3a3c41;--done:#14532d;--mask:#2c2e32;--skip:#26282b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:2px 0 4px}
+.note{color:var(--mute);font-size:13px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:#2563eb;color:#fff;border-color:#2563eb}
+.main{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.gridwrap{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+table.g{border-collapse:collapse}
+table.g th{font-size:12px;color:var(--mute);font-weight:500;padding:2px 4px;width:44px}
+table.g td{width:44px;height:40px;border:1px solid var(--line);text-align:center;font-size:10px;color:var(--mute);transition:background .25s}
+table.g td.tl{border-left:3px solid var(--fg)}table.g td.tt{border-top:3px solid var(--fg)}
+table.g td.mask{background:repeating-linear-gradient(45deg,var(--mask) 0 5px,transparent 5px 10px)}
+table.g td.skip{background:var(--skip);color:transparent}
+table.g td.cur1{background:#bfdbfe;color:#1e3a8a;font-weight:600}
+table.g td.cur2{background:#fed7aa;color:#7c2d12;font-weight:600}
+table.g td.done{background:var(--done);color:var(--mute)}
+table.g td.curmask{background:repeating-linear-gradient(45deg,#fca5a5 0 5px,transparent 5px 10px)}
+table.g tr.focus th{color:var(--fg);font-weight:700}
+.side{flex:1;min-width:300px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+.panel.w1{border-left:5px solid var(--w1)}.panel.w2{border-left:5px solid var(--w2)}
+.panel .hd{font-weight:600}
+.rule{font-size:14px}
+.rule b{color:#c2410c}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--mute);margin-top:8px}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:4px;border:1px solid var(--line)}
+.nb{font-size:13px;font-variant-numeric:tabular-nums;margin-top:4px}
+.nb div{padding:1px 0}
+.big{font-size:15px;font-weight:600}
+</style></head><body><div class="wrap">
+<h1>动画：FlashAttention 竖着切、往右走</h1>
+<p class="note">8 个 token 的三角分数表（行 = query，列 = key，右上被遮罩）。粗线把它切成 2×2 的小块：<b>竖着切</b> = K/V 每块 2 个 token；<b>横着切</b> = Q 每块 2 行，分给工人。工人 1（蓝）负责第 1-2 行、然后第 5-6 行；工人 2（橙）负责第 3-4 行、然后第 7-8 行。</p>
+<div class="ctrl"><button class="pri" id="play">▶ 播放</button><button id="step">走一步</button><button id="reset">重来</button>
+<label class="note">速度 <input type="range" id="spd" min="300" max="2000" value="1200" style="vertical-align:middle"></label>
+<label class="note">盯住某一行：<select id="focus"><option value="7">第 8 行（最后一行）</option><option value="6">第 7 行</option><option value="2">第 3 行</option><option value="0">第 1 行</option></select></label></div>
+<div class="main">
+<div class="gridwrap"><table class="g" id="g"></table>
+<div class="legend"><span><i style="background:#bfdbfe"></i>工人1 正在算</span><span><i style="background:#fed7aa"></i>工人2 正在算</span><span><i style="background:var(--done)"></i>算完已加进 l、o 并扔掉</span><span><i style="background:repeating-linear-gradient(45deg,var(--mask) 0 4px,transparent 4px 8px)"></i>遮罩（不能看未来）</span></div></div>
+<div class="side">
+<div class="panel"><div class="hd">怎么判断一块要不要算？（看块的编号）</div>
+<div class="rule">设 Q 块编号 i（第几横条），K/V 块编号 j（第几竖条）：<br>
+• <b>j &lt; i</b>：整块都在对角线左下 → <b>全部算</b><br>
+• <b>j = i</b>：对角块 → <b>算，但把 key 比 query 靠后的格子遮掉</b><br>
+• <b>j &gt; i</b>：整块都在右上 → <b>整块跳过</b>，连搬都不搬<br>
+<span class="note">所以工人一行行往右走，走到对角块就停：第 i 横条只需要走 i 块。</span></div></div>
+<div class="panel w1"><div class="hd" style="color:var(--w1)">工人 1</div><div id="p1" class="nb"></div></div>
+<div class="panel w2"><div class="hd" style="color:var(--w2)">工人 2</div><div id="p2" class="nb"></div></div>
+<div class="panel"><div class="hd" id="fh"></div><div id="fp" class="nb"></div></div>
+</div></div>
+</div>
+<script>
+const T=8,B=2,NB=T/B;
+// job lists: each worker processes Q blocks in order; for each Q block i, K blocks j=0..i
+const jobs=[[0,2],[1,3]];
+function tilesFor(w){const out=[];jobs[w].forEach(i=>{for(let j=0;j<NB;j++)out.push({i,j,skip:j>i})});return out}
+// schedule: each tick each worker does its next non-skip tile; skipped tiles are shown as text but don't cost a tick
+const plan=[0,1].map(w=>tilesFor(w));
+let ptr=[0,0],tick=0,state={},log=[[],[]],timer=null;
+const $=id=>document.getElementById(id);
+function cellKey(r,c){return r+','+c}
+function build(){let h='<tr><th></th>'+Array.from({length:T},(_,c)=>`<th>k${c+1}</th>`).join('')+'</tr>';
+ for(let r=0;r<T;r++){h+=`<tr id="r${r}"><th>q${r+1}</th>`;for(let c=0;c<T;c++){const cls=[(c%B==0&&c>0)?'tl':'',(r%B==0&&r>0)?'tt':''];h+=`<td id="c${r}_${c}" class="${cls.join(' ')}"></td>`}h+='</tr>'}
+ $('g').innerHTML=h}
+function reset(){ptr=[0,0];state={};log=[[],[]];tick=0;
+ for(let r=0;r<T;r++)for(let c=0;c<T;c++)state[cellKey(r,c)]=c>r?'mask':'';
+ render([null,null]);}
+function nextTile(w){while(ptr[w]<plan[w].length){const t=plan[w][ptr[w]++];if(t.skip){log[w].push(`Q块${t.i+1} × K块${t.j+1}：j&gt;i，<b>整块跳过</b>`);continue}return t}return null}
+function step(){
+ // finish previous current tiles -> done
+ for(const k in state){if(state[k]=='cur1'||state[k]=='cur2')state[k]='done';if(state[k]=='curmask')state[k]='mask'}
+ const cur=[nextTile(0),nextTile(1)];
+ if(!cur[0]&&!cur[1]){render([null,null],true);stop();return}
+ cur.forEach((t,w)=>{if(!t)return;
+  const kind=t.j<t.i?'全部算':'对角块：算下三角，遮掉右上';
+  log[w].push(`Q块${t.i+1}（q${t.i*B+1}、q${t.i*B+2}）× K/V块${t.j+1}（k${t.j*B+1}、k${t.j*B+2}）：${t.j<t.i?'j&lt;i':'j=i'} → <b>${kind}</b>`);
+  for(let r=t.i*B;r<t.i*B+B;r++)for(let c=t.j*B;c<t.j*B+B;c++)state[cellKey(r,c)]=c>r?'curmask':(w==0?'cur1':'cur2')});
+ tick++;render(cur)}
+function render(cur,fin){
+ for(let r=0;r<T;r++)for(let c=0;c<T;c++){const el=$(`c${r}_${c}`);const s=state[cellKey(r,c)];el.className=el.className.replace(/\b(mask|cur1|cur2|done|curmask|skip)\b/g,'').trim()+' '+s;el.textContent=(s=='cur1'||s=='cur2')?`q${r+1}k${c+1}`:''}
+ [0,1].forEach(w=>{const t=cur[w];let h='';
+  if(t)h+=`<div class="big">桌上：q${t.i*B+1}、q${t.i*B+2} ＋ k${t.j*B+1} v${t.j*B+1}、k${t.j*B+2} v${t.j*B+2}</div>`;
+  else h+=`<div class="big">${fin||ptr[w]>=plan[w].length?'全部完成 ✅':'等待开始'}</div>`;
+  h+=log[w].slice(-4).map(x=>`<div>· ${x}</div>`).join('');
+  $('p'+(w+1)).innerHTML=h});
+ // focus row
+ const fr=+$('focus').value;document.querySelectorAll('table.g tr').forEach(tr=>tr.classList.remove('focus'));$('r'+fr).classList.add('focus');
+ const cols=[];for(let c=0;c<=fr;c++){const s=state[cellKey(fr,c)];if(s=='done'||s=='cur1'||s=='cur2')cols.push(c)}
+ const owner=jobs[0].includes(Math.floor(fr/B))?'工人 1':'工人 2';
+ $('fh').textContent=`盯住第 ${fr+1} 行（q${fr+1}，由${owner}负责）`;
+ const nBlocks=Math.floor(fr/B)+1;
+ $('fp').innerHTML=`这一行有 ${fr+1} 个有效分数（k1~k${fr+1}），分 ${nBlocks} 块（${nBlocks} 段）来算。<br>已加进记事本 l、o 的：${cols.length?cols.map(c=>'k'+(c+1)).join('、'):'还没有'}<br>${cols.length==fr+1?'<b>整行扫完 → o ÷ l → 写回输出 ✅</b>':'桌上同一时刻最多只有这一行的 2 个分数'}`;
+}
+function play(){if(timer){stop();return}$('play').textContent='⏸ 暂停';const go=()=>{step();if(timer)timer=setTimeout(go,+$('spd').max- +$('spd').value+300)};timer=setTimeout(go,10)}
+function stop(){clearTimeout(timer);timer=null;$('play').textContent='▶ 播放'}
+$('play').onclick=play;$('step').onclick=()=>{stop();step()};$('reset').onclick=()=>{stop();reset()};$('focus').onchange=()=>render([null,null]);
+build();reset();
+</script></body></html>

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FlashAttention 拆到最细：只看一行</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--card:#fff;--line:#e5e2db;--acc:#c2410c;--blue:#2563eb;--green:#15803d;--new:#fef3c7;--dead:#efede8}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#3a3c41;--acc:#fb923c;--blue:#60a5fa;--green:#4ade80;--new:#4a3a10;--dead:#2c2e32}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:920px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:2px 0 4px}
+.note{color:var(--mute);font-size:13px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5;border-bottom:1px solid var(--line)}
+button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:#2563eb;color:#fff;border-color:#2563eb}button:disabled{opacity:.4}
+.dots{display:flex;gap:4px;flex-wrap:wrap}.dot{min-width:24px;height:24px;border-radius:12px;border:1px solid var(--line);font-size:11px;display:grid;place-items:center;cursor:pointer;padding:0 5px}
+.dot.on{background:#2563eb;color:#fff;border-color:#2563eb}
+.part{font-size:12px;font-weight:700;color:var(--acc);margin-top:10px;letter-spacing:.5px}
+.explain{background:var(--card);border:1px solid var(--line);border-left:5px solid #2563eb;border-radius:10px;padding:12px 16px;margin:8px 0}
+.explain h3{margin:0 0 6px;font-size:18px}
+.scene{display:grid;grid-template-columns:1fr;gap:10px;margin:10px 0}
+.zone{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.zone .hd{font-weight:600;font-size:14px;margin-bottom:6px}
+.cards{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.card{border:1.5px solid var(--line);border-radius:8px;padding:4px 10px;min-width:62px;text-align:center;font-size:14px;background:var(--bg);font-variant-numeric:tabular-nums}
+.card small{display:block;color:var(--mute);font-size:11px;line-height:1.2}
+.card.k{border-color:#60a5fa}.card.v{border-color:#4ade80}.card.q{border-color:#f472b6}.card.s{border-color:var(--acc)}
+.card.new{background:var(--new);box-shadow:0 0 0 2px var(--acc)}
+.card.dead{opacity:.35;text-decoration:line-through}
+.card.ghost{border-style:dashed;color:var(--mute)}
+.nb{display:flex;gap:10px;flex-wrap:wrap}
+.nbx{border:2px solid var(--line);border-radius:10px;padding:6px 12px;min-width:120px;text-align:center}
+.nbx .n{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.nbx .l{font-size:12px;color:var(--mute)}
+.nbx.ch{border-color:var(--acc);background:var(--new)}
+.say{font-size:14px;background:var(--bg);border:1px dashed var(--line);border-radius:8px;padding:8px 10px;margin-top:8px}
+.trip{font-size:13px;color:var(--acc);font-weight:600}
+.big{font-size:24px;font-weight:700;color:var(--green)}
+.row2{display:flex;gap:10px;flex-wrap:wrap}.row2>.zone{flex:1;min-width:260px}
+</style></head><body><div class="wrap">
+<h1>FlashAttention 拆到最细：只看一行</h1>
+<p class="note">只看 1 个 token（token 4）怎么从 token 1~4 拿信息。数字故意取简单的：4 个分数和 4 个 v（v 简化成一个数）。桌子（SRAM）一次只放得下 2 张 k 卡和 2 张 v 卡。</p>
+<div class="ctrl"><button id="prev">← 上一步</button><button class="pri" id="next">下一步 →</button><div class="dots" id="dots"></div></div>
+<div id="partname" class="part"></div>
+<div class="explain" id="ex"></div>
+<div class="scene" id="scene"></div>
+</div>
+<script>
+const S1=[1,3,0.5,4], V=[10,20,30,40];
+const f=(x,n=2)=>x.toFixed(n);
+const e=Math.exp;
+// plain
+const E1=S1.map(s=>e(s)),L1=E1.reduce((a,b)=>a+b),W1=E1.map(x=>x/L1),ANS=W1.reduce((a,w,i)=>a+w*V[i],0);
+// naive flash
+const lA=E1[0]+E1[1],oA=E1[0]*V[0]+E1[1]*V[1],lB=lA+E1[2]+E1[3],oB=oA+E1[2]*V[2]+E1[3]*V[3];
+// big scores
+const S2=S1.map(s=>s+10);
+const m1=Math.max(S2[0],S2[1]),eA=[e(S2[0]-m1),e(S2[1]-m1)],l2A=eA[0]+eA[1],o2A=eA[0]*V[0]+eA[1]*V[1];
+const m2=Math.max(m1,S2[2],S2[3]),sc=e(m1-m2),l2Asc=l2A*sc,o2Asc=o2A*sc,eB=[e(S2[2]-m2),e(S2[3]-m2)];
+const l2B=l2Asc+eB[0]+eB[1],o2B=o2Asc+eB[0]*V[2]+eB[1]*V[3];
+
+const card=(cls,top,sub,st='')=>`<div class="card ${cls} ${st}">${top}<small>${sub}</small></div>`;
+function shelf({scores=null,weights=null,hlS=false,hlW=false,ans=null,ghost=false}={}){
+ let h=`<div class="zone"><div class="hd">📦 仓库（HBM 显存：大、远、搬一次很贵）</div><div class="cards">`;
+ [0,1,2,3].forEach(i=>h+=card('k','k'+(i+1),'token '+(i+1)));
+ [0,1,2,3].forEach(i=>h+=card('v','v'+(i+1)+' = '+V[i],'token '+(i+1)));
+ h+=`</div>`;
+ h+=`<div class="cards" style="margin-top:8px"><span class="note" style="width:70px">分数区：</span>`;
+ if(scores)scores.forEach((s,i)=>h+=card('s',f(s,1),'q4·k'+(i+1),hlS?'new':''));else h+=`<span class="note">${ghost?'空的（Flash 从不往这里写）':'空'}</span>`;
+ h+=`</div>`;
+ if(weights){h+=`<div class="cards" style="margin-top:6px"><span class="note" style="width:70px">权重区：</span>`;weights.forEach((w,i)=>h+=card('s',f(w,3),'权重'+(i+1),hlW?'new':''));h+=`</div>`}
+ if(ans!==null)h+=`<div style="margin-top:6px">输出区：<b>${f(ans)}</b></div>`;
+ return h+'</div>'}
+function desk(items,title='🔧 桌子（SRAM：小、快，只能算桌上的东西）'){return `<div class="zone"><div class="hd">${title}</div><div class="cards">${items.join('')}</div></div>`}
+function notebook(arr){return `<div class="zone"><div class="hd">📒 记事本（就在桌上，每行只有这几个数）</div><div class="nb">${arr.map(a=>`<div class="nbx ${a.ch?'ch':''}"><div class="l">${a.l}</div><div class="n">${a.n}</div></div>`).join('')}</div></div>`}
+const q4=card('q','q4','token 4 的问题');
+
+const steps=[
+// ---------- Part A
+{p:'第一部分：普通做法（先看清楚要算什么）',t:'1. 任务是什么',
+ x:`token 4 想从 token 1~4 那里"拿信息"。规则是：<br>① q4 和每个 k 比一比，得到 4 个<b>分数</b>（越大越相关）<br>② 分数 → 取 e → 除以总和 → 4 个<b>权重</b>（加起来 = 1）<br>③ 按权重把 4 个 v 混起来 → <b>输出</b><br>假设比出来的分数是 <b>1、3、0.5、4</b>，v 是 <b>10、20、30、40</b>。`,
+ s:()=>shelf()+desk([q4])},
+{p:'第一部分：普通做法',t:'2. 普通做法第 ① 趟：算出 4 个分数，写进仓库',
+ x:`把 k1~k4 全搬上桌，和 q4 比，得到 4 个分数。桌子放不下"所有东西一直摆着"，所以分数先<b>写回仓库</b>存起来。`,
+ s:()=>shelf({scores:S1,hlS:true})+desk([q4,...[0,1,2,3].map(i=>card('k','k'+(i+1),''))])+`<div class="trip">🚚 搬运：k1~k4 搬上桌；4 个分数写回仓库</div>`},
+{p:'第一部分：普通做法',t:'3. 普通做法第 ② 趟：读回分数，算权重，再写回去',
+ x:`把 4 个分数读回桌上：取 e → ${E1.map(x=>f(x)).join('、')}；加起来总和 = <b>${f(L1)}</b>；每个除以总和 → 4 个权重。权重再<b>写回仓库</b>。<br><b>必须等 4 个分数全到齐</b>才能算总和，这就是 softmax 麻烦的地方。`,
+ s:()=>shelf({scores:S1,weights:W1,hlW:true})+desk([q4,...S1.map((s,i)=>card('s',f(s,1),'分数'+(i+1)))])+`<div class="trip">🚚 搬运：分数读回；权重写回仓库</div>`},
+{p:'第一部分：普通做法',t:'4. 普通做法第 ③ 趟：读回权重，混合 v',
+ x:`读回权重，搬 v 上桌：${W1.map((w,i)=>f(w,3)+'×'+V[i]).join(' + ')} = <b>${f(ANS)}</b>。<br>答案是 <b>${f(ANS)}</b>。<br>问题：中间的"分数"和"权重"在仓库里<b>来回跑了 4 趟</b>。这里只有 4 个数还好；真实情况一行有 32000 个，32000 行就是 10 亿个数（2 GB）。`,
+ s:()=>shelf({scores:S1,weights:W1,ans:ANS})+desk([q4,...W1.map((w,i)=>card('s',f(w,3),'权重'+(i+1))),...[0,1,2,3].map(i=>card('v','v'+(i+1)+'='+V[i],''))])+`<div class="trip">🚚 搬运：权重读回、v 搬上桌；输出写回</div>`},
+// ---------- Part B
+{p:'第二部分：Flash 最朴素版（核心思想）',t:'5. 关键发现：答案 = 一个"加法"除以另一个"加法"',
+ x:`把第 3、4 步合起来看，答案其实是：<br><b>答案 = (e¹×10 + e³×20 + e^0.5×30 + e⁴×40) ÷ (e¹ + e³ + e^0.5 + e⁴)</b><br>上面叫 <b>o</b>（分子），下面叫 <b>l</b>（分母）。<b>两个都只是加法，加法可以分批加！</b><br>所以不需要先拿到全部分数：看一张加一张，最后做一次除法就行。只要在记事本上记 <b>l</b> 和 <b>o</b> 两个数。`,
+ s:()=>shelf({ghost:true})+desk([q4])+notebook([{l:'l（分母累计）',n:'0'},{l:'o（分子累计）',n:'0'}])},
+{p:'第二部分：Flash 最朴素版',t:'6. 第 1 批：k1、k2、v1、v2 搬上桌',
+ x:`桌子放得下 2 张 k 和 2 张 v。<br>q4 和 k1、k2 比 → 分数 <b>1、3</b>（只在桌上出现）<br>取 e → <b>${f(E1[0])}、${f(E1[1])}</b><br>l 加上它们：0 + ${f(E1[0])} + ${f(E1[1])} = <b>${f(lA)}</b><br>o 加上 e×v：0 + ${f(E1[0])}×10 + ${f(E1[1])}×20 = <b>${f(oA,1)}</b>`,
+ s:()=>shelf({ghost:true})+desk([q4,card('k','k1',''),card('k','k2',''),card('v','v1=10',''),card('v','v2=20',''),card('s','1','分数','new'),card('s','3','分数','new')])+notebook([{l:'l',n:f(lA),ch:1},{l:'o',n:f(oA,1),ch:1}])+`<div class="trip">🚚 搬运：只搬了 k1 k2 v1 v2 上桌，什么都没写回</div>`},
+{p:'第二部分：Flash 最朴素版',t:'7. 分数用完就扔，换下一批',
+ x:`分数 1 和 3 已经"加进"记事本了，<b>不需要再存</b>，直接扔掉。k1 k2 v1 v2 也可以从桌上拿走，给下一批腾地方。<br>记事本里的 l、o 留着。<b>这就是"分数表不进仓库"的意思</b>：分数在桌上出生，在桌上被用掉。`,
+ s:()=>shelf({ghost:true})+desk([q4,card('k','k1','','dead'),card('k','k2','','dead'),card('v','v1','','dead'),card('v','v2','','dead'),card('s','1','','dead'),card('s','3','','dead')])+notebook([{l:'l',n:f(lA)},{l:'o',n:f(oA,1)}])},
+{p:'第二部分：Flash 最朴素版',t:'8. 第 2 批：k3、k4、v3、v4 搬上桌',
+ x:`q4 和 k3、k4 比 → 分数 <b>0.5、4</b><br>取 e → <b>${f(E1[2])}、${f(E1[3])}</b><br>l 继续加：${f(lA)} + ${f(E1[2])} + ${f(E1[3])} = <b>${f(lB)}</b><br>o 继续加：${f(oA,1)} + ${f(E1[2])}×30 + ${f(E1[3])}×40 = <b>${f(oB,1)}</b>`,
+ s:()=>shelf({ghost:true})+desk([q4,card('k','k3',''),card('k','k4',''),card('v','v3=30',''),card('v','v4=40',''),card('s','0.5','分数','new'),card('s','4','分数','new')])+notebook([{l:'l',n:f(lB),ch:1},{l:'o',n:f(oB,1),ch:1}])+`<div class="trip">🚚 搬运：只搬了 k3 k4 v3 v4 上桌</div>`},
+{p:'第二部分：Flash 最朴素版',t:'9. 全部看完，最后除一次',
+ x:`答案 = o ÷ l = ${f(oB,1)} ÷ ${f(lB)} = <span class="big">${f(oB/lB)}</span><br>和普通做法的 <b>${f(ANS)}</b> 一模一样！<br>而且仓库的"分数区"从头到尾是空的，只在最后写了一个输出。<br>🎯 <b>FlashAttention 的核心思想就这么多：softmax 的分子、分母都是加法，可以分批累加，最后除一次。</b>`,
+ s:()=>shelf({ghost:true,ans:oB/lB})+desk([q4])+notebook([{l:'l',n:f(lB)},{l:'o',n:f(oB,1)},{l:'答案 o÷l',n:f(oB/lB),ch:1}])+`<div class="trip">🚚 搬运：只写回了 1 个输出</div>`},
+// ---------- Part C
+{p:'第三部分：为什么还要"补救"',t:'10. 问题：e 的数会爆掉',
+ x:`上面的数很小，所以没事。但真实的分数可能是 <b>11、13、10.5、14</b> 这样（就是每个都 +10）。<br>e¹⁴ ≈ <b>${Math.round(e(14)).toLocaleString()}</b>。而 GPU 常用的 fp16 格式，<b>最大只能存 65504</b>，e¹² 就超了，会变成"无穷大"，结果全坏。<br>解决办法（普通 softmax 也这么做）：<b>每个分数先减去最大值再取 e</b>。这样最大的那个变成 e⁰ = 1，其他都小于 1，永远不会爆。而且分子分母同时缩小，相除后答案不变。`,
+ s:()=>desk([q4,...S2.map((s,i)=>card('s',s,'分数'+(i+1)))],'这一行的真实分数')+`<div class="zone"><div class="hd">对比</div>直接取 e：${S2.map(s=>Math.round(e(s)).toLocaleString()).join('、')} ❌ 超过 65504<br>减去最大值 14 再取 e：${S2.map(s=>f(e(s-14),3)).join('、')} ✅ 都 ≤ 1</div>`},
+{p:'第三部分：为什么还要"补救"',t:'11. 但 Flash 一开始不知道最大值是多少',
+ x:`普通做法先看完全部分数，知道最大是 14。<br>Flash 第 1 批只看到 <b>11、13</b>，第 2 批还没来。怎么办？<br>→ <b>先用"目前见过的最大值"</b>，也就是 13。记事本多记一个数 <b>m</b> = 目前的最大值。<br>可以把 m 想成一把"<b>尺子</b>"：所有 e 都是"相对于 m"量出来的。`,
+ s:()=>shelf({ghost:true})+desk([q4,card('k','k1',''),card('k','k2',''),card('s','11','分数','new'),card('s','13','分数','new'),card('s','?','分数3','ghost'),card('s','?','分数4','ghost')])+notebook([{l:'m（目前最大 = 尺子）',n:'13',ch:1},{l:'l',n:'?'},{l:'o',n:'?'}])},
+{p:'第三部分：为什么还要"补救"',t:'12. 第 1 批：用尺子 13 来量',
+ x:`e^(11−13) = <b>${f(eA[0],3)}</b>，e^(13−13) = <b>1</b><br>l = ${f(eA[0],3)} + 1 = <b>${f(l2A,3)}</b><br>o = ${f(eA[0],3)}×10 + 1×20 = <b>${f(o2A)}</b><br>分数扔掉，换下一批。`,
+ s:()=>shelf({ghost:true})+desk([q4,card('k','k1',''),card('k','k2',''),card('v','v1=10',''),card('v','v2=20',''),card('s','11','',''),card('s','13','','')])+notebook([{l:'m（尺子）',n:'13'},{l:'l',n:f(l2A,3),ch:1},{l:'o',n:f(o2A),ch:1}])},
+{p:'第三部分：为什么还要"补救"',t:'13. 第 2 批来了，出现更大的 14：尺子要换！',
+ x:`第 2 批分数是 <b>10.5、14</b>。14 比 13 大，尺子要换成 14。<br>问题：记事本里的 l、o 是用<b>旧尺子 13</b> 量的，新的数要用<b>新尺子 14</b> 量，两种尺子量的数不能直接相加（像人民币和美元）。<br>👉 <b>补救 = 把旧的数换算到新尺子</b>：乘 e^(旧尺子 − 新尺子) = e^(13−14) = <b>${f(sc,3)}</b><br>l：${f(l2A,3)} × ${f(sc,3)} = <b>${f(l2Asc,3)}</b><br>o：${f(o2A)} × ${f(sc,3)} = <b>${f(o2Asc)}</b>`,
+ s:()=>shelf({ghost:true})+desk([q4,card('k','k3',''),card('k','k4',''),card('s','10.5','分数','new'),card('s','14','分数 ← 更大！','new')])+notebook([{l:'m（尺子）',n:'13 → 14',ch:1},{l:'l 换算后',n:f(l2Asc,3),ch:1},{l:'o 换算后',n:f(o2Asc),ch:1}])},
+{p:'第三部分：为什么还要"补救"',t:'14. 换算完，再把新的加进去',
+ x:`用新尺子 14 量第 2 批：e^(10.5−14) = <b>${f(eB[0],3)}</b>，e^(14−14) = <b>1</b><br>l = ${f(l2Asc,3)} + ${f(eB[0],3)} + 1 = <b>${f(l2B,3)}</b><br>o = ${f(o2Asc)} + ${f(eB[0],3)}×30 + 1×40 = <b>${f(o2B)}</b>`,
+ s:()=>shelf({ghost:true})+desk([q4,card('k','k3',''),card('k','k4',''),card('v','v3=30',''),card('v','v4=40',''),card('s','10.5','',''),card('s','14','','')])+notebook([{l:'m（尺子）',n:'14'},{l:'l',n:f(l2B,3),ch:1},{l:'o',n:f(o2B),ch:1}])},
+{p:'第三部分：为什么还要"补救"',t:'15. 最后除一次：答案还是一样',
+ x:`答案 = o ÷ l = ${f(o2B)} ÷ ${f(l2B,3)} = <span class="big">${f(o2B/l2B)}</span><br>和前面两种做法完全一样！<br>🎯 总结：<br>• <b>核心思想</b>（第 5~9 步）：分子分母都是加法，分批加，最后除<br>• <b>补救</b>（第 10~15 步）：为了防止 e 爆掉要减最大值，最大值变了就换算一下旧的数<br>• <b>桌上一直只有</b>：q4、当前这批 k v、记事本里的 m、l、o。分数生了就用、用了就扔`,
+ s:()=>shelf({ghost:true,ans:o2B/l2B})+notebook([{l:'m',n:'14'},{l:'l',n:f(l2B,3)},{l:'o',n:f(o2B)},{l:'答案',n:f(o2B/l2B),ch:1}])},
+{p:'第四部分：放回真实 GPU',t:'16. 真实情况只是"规模更大"',
+ x:`• v 不是一个数，是 128 维的向量 → 记事本里的 o 也是 128 个数（m、l 还是各 1 个）<br>• 一行不是 4 个 k，是几千上万个 → 分成很多批，每批 64~128 个<br>• 不止 1 行，是几千行 → 分给 108 个工人，每人领几行，每人自己按上面的步骤扫完自己的行（上一个图的第 5~8 步）<br>• 每层、每个头都这样做一遍<br><br>你已经看懂一行了，其他行只是"同时有很多人在做同样的事"。`,
+ s:()=>`<div class="zone"><div class="hd">一个工人的桌上同时有</div><div class="cards">${card('q','q 块','几行 query')}${card('k','K 块','64~128 个 token')}${card('v','V 块','64~128 个 token')}${card('s','分数块','用完就扔')}${card('','m、l、o','每行一份')}</div></div>`}
+];
+let cur=0;const $=id=>document.getElementById(id);
+function render(){const st=steps[cur];$('partname').textContent=st.p;$('ex').innerHTML=`<h3>${st.t}</h3>${st.x}`;$('scene').innerHTML=st.s();
+ [...$('dots').children].forEach((d,i)=>d.classList.toggle('on',i==cur));$('prev').disabled=cur==0;$('next').disabled=cur==steps.length-1}
+steps.forEach((s,i)=>{const d=document.createElement('div');d.className='dot';d.textContent=i+1;d.onclick=()=>{cur=i;render()};$('dots').appendChild(d)});
+$('next').onclick=()=>{if(cur<steps.length-1){cur++;render();scrollTo(0,0)}};$('prev').onclick=()=>{if(cur>0){cur--;render()}};
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight')$('next').click();if(e.key==='ArrowLeft')$('prev').click()});
+render();
+</script></body></html>

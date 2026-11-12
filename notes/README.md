@@ -10,6 +10,7 @@
 | 4 | Function Calling、ReAct 循环、Agent harness、MCP | [week04](week04-agent-react-mcp.md) | 3.3/5 | tool_call_id、Agent 循环两个结束条件、排查看工具日志、softmax e⁰=1 |
 | 5 | Embedding、RAG、检索 MCP Server、评测、项目 1 | [week05](week05-rag-mcp-eval.md) · [项目 1](../week5/project1/README.md) | 3.6/5 | RAG 最后一步是生成、门槛只防跑题、选型回答用数据 + 替代方案 |
 | 6 | Scaling Laws、LLaMA 架构（RMSNorm/SwiGLU）、RoPE、GQA 与 KV Cache | [week06](week06-modern-arch.md) | 约 1/5 | 参数量四步算法、显存估算（权重 + KV Cache）、算力 ×100 → N、D 各 ×10、e⁰=1 |
+| 7 | 推理优化：屋顶线、FlashAttention、vLLM（PagedAttention/连续批处理/chunked prefill）、量化 | [week07](week07-inference-optimization.md) | 约 1.8/5 | softmax 最后除总和、售前题先算数字、连续批处理 vs chunked prefill、量化快是因为搬得少 |
 
 ## 每篇笔记的固定结构
 一句话总结 → 核心概念 → 关键代码 → 实验结果 → 我的提问与解答 → 易错点 → 复习题

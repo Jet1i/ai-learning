@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>连续批处理 + chunked prefill</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--card:#fff;--line:#e5e2db;--empty:#f1efea}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#3a3c41;--empty:#2a2c30}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:2px 0 4px}h2{font-size:18px;margin:24px 0 4px}
+.note{color:var(--mute);font-size:13px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:#2563eb;color:#fff;border-color:#2563eb}
+button.on{background:var(--fg);color:var(--bg)}
+.cols{display:flex;gap:14px;flex-wrap:wrap}
+.side{flex:1;min-width:330px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.side h3{font-size:16px;margin:0 0 6px}
+.seats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}
+.seat{height:70px;border-radius:10px;border:2px dashed var(--line);display:grid;place-items:center;font-weight:700;font-size:20px;color:#fff;transition:all .25s;position:relative}
+.seat.full{border-style:solid}
+.seat small{position:absolute;bottom:3px;font-size:11px;font-weight:500}
+.seat.idle{color:var(--mute);font-size:12px;font-weight:500}
+.stat{font-size:14px;display:flex;gap:14px;flex-wrap:wrap}.stat b{font-size:19px}
+.bar{height:12px;border-radius:6px;background:var(--empty);overflow:hidden;margin-top:4px}.bar div{height:100%;background:#16a34a;transition:width .25s}
+.small{font-size:13px;margin-top:4px}
+.explain{background:var(--card);border:1px solid var(--line);border-left:5px solid #2563eb;border-radius:10px;padding:10px 14px;margin:8px 0;min-height:44px}
+.tl{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.trow{display:flex;align-items:center;gap:8px;margin:8px 0}
+.trow .lab{width:90px;font-size:13px}
+.track{flex:1;height:30px;position:relative;background:var(--empty);border-radius:6px}
+.tick{position:absolute;top:5px;width:6px;height:20px;border-radius:2px;background:#16a34a}
+.pf{position:absolute;top:3px;height:24px;border-radius:5px;background:#ea580c;opacity:.85;color:#fff;font-size:11px;display:grid;place-items:center;overflow:hidden}
+.gap{position:absolute;top:0;height:30px;background:repeating-linear-gradient(45deg,rgba(220,38,38,.25) 0 6px,transparent 6px 12px);border-radius:6px}
+.axis{display:flex;justify-content:space-between;font-size:11px;color:var(--mute);margin-left:98px}
+.kpi{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
+.kpi div{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 12px}
+.kpi b{font-size:20px;display:block}
+</style></head><body><div class="wrap">
+<h1>让每一步都坐满人：连续批处理 + chunked prefill</h1>
+<p class="note">一辆 4 个座位的车 = GPU 一步最多同时处理 4 个请求。每走一步，车上每人生成 1 个 token。搬一次权重的时间几乎固定（L1），空座位 = 白白浪费。</p>
+
+<h2>① 静态批处理 vs 连续批处理</h2>
+<div class="note" id="queueinfo"></div>
+<div class="ctrl"><button class="pri" id="play">▶ 播放</button><button id="step">走一步</button><button id="reset">重来</button><span class="note" id="tick"></span></div>
+<div class="explain" id="ex"></div>
+<div class="cols">
+<div class="side"><h3>静态：凑齐一车，等最慢的人到站才换下一车</h3><div class="seats" id="s0"></div><div class="stat" id="st0"></div><div class="bar"><div id="b0"></div></div><div class="small" id="q0"></div></div>
+<div class="side"><h3>连续（vLLM）：谁到站下车，下一步马上补人</h3><div class="seats" id="s1"></div><div class="stat" id="st1"></div><div class="bar"><div id="b1"></div></div><div class="small" id="q1"></div></div>
+</div>
+
+<h2>② chunked prefill：长文档别卡住别人</h2>
+<p class="note">车上已有 3 个用户 U1~U3 在一个字一个字地出（每步 20 ms，绿色竖条 = 收到一个字）。60 ms 时来了新用户 N，带一份 8000 token 的长文档，prefill 要 480 ms（算力受限）。</p>
+<div class="ctrl"><button id="m0" class="on">不切块</button><button id="m1">切块（每段 1000 token）</button></div>
+<div class="tl"><div id="tl"></div><div class="axis"><span>0</span><span>200</span><span>400</span><span>600</span><span>800</span><span>1000 ms</span></div>
+<div class="kpi" id="kpi"></div><div class="explain" id="tlex" style="margin-top:10px"></div></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+// ---------- part 1
+const SEATS=4;
+const R=[{n:'A',len:2,c:'#2563eb'},{n:'B',len:6,c:'#ea580c'},{n:'C',len:3,c:'#16a34a'},{n:'D',len:1,c:'#9333ea'},{n:'E',len:4,c:'#db2777'},{n:'F',len:2,c:'#0891b2'},{n:'G',len:3,c:'#ca8a04'}];
+$('queueinfo').innerHTML='排队顺序和各自要生成几个 token：'+R.map(r=>`<b style="color:${r.c}">${r.n}</b>=${r.len}`).join('　');
+let M,t,timer=null,msg;
+function init(){t=0;msg='点"走一步"开始。';M=[0,1].map(mode=>({mode,seats:Array(SEATS).fill(null),queue:R.map(r=>({...r,left:r.len})),done:[],used:0,total:0,fin:0}));render()}
+function stepMode(m){const ev=[];
+ if(m.fin)return ev;
+ // board
+ if(m.mode===0){if(m.seats.every(s=>!s)){for(let i=0;i<SEATS&&m.queue.length;i++){m.seats[i]=m.queue.shift();}ev.push('新一车上客：'+m.seats.filter(s=>s).map(s=>s.n).join('、'))}}
+ else{for(let i=0;i<SEATS;i++)if(!m.seats[i]&&m.queue.length){m.seats[i]=m.queue.shift();ev.push(m.seats[i].n+' 上车')}}
+ // run one step
+ m.total+=SEATS;
+ m.seats.forEach((s,i)=>{if(s&&s.left>0){s.left--;m.used++;if(s.left===0){ev.push(s.n+' 到站');m.done.push(s.n)}}});
+ // alight
+ if(m.mode===1){m.seats=m.seats.map(s=>s&&s.left===0?null:s)}
+ else{if(m.seats.every(s=>!s||s.left===0)){m.seats=Array(SEATS).fill(null)}}
+ if(m.done.length===R.length)m.fin=t;
+ return ev}
+function step(){if(M.every(m=>m.fin)){stop();return}t++;const e=M.map(stepMode);
+ msg=`第 ${t} 步。静态：${M[0].fin&&M[0].fin<t?'已全部完成':e[0].join('，')||'继续开'}　｜　连续：${M[1].fin&&M[1].fin<t?'已全部完成':e[1].join('，')||'继续开'}`;
+ if(M.every(m=>m.fin))msg+=`<br><b>结果：7 个请求全部完成，静态用了 ${M[0].fin} 步，连续用了 ${M[1].fin} 步。</b>`;render()}
+function render(){$('tick').textContent=`第 ${t} 步`;$('ex').innerHTML=msg;
+ M.forEach((m,k)=>{$('s'+k).innerHTML=m.seats.map(s=>s?(s.left>0?`<div class="seat full" style="background:${s.c};border-color:${s.c}">${s.n}<small>还剩 ${s.left}</small></div>`:`<div class="seat idle">${s.n} 已到站<br>座位空着</div>`):`<div class="seat idle">空座</div>`).join('');
+  const u=m.total?m.used/m.total:0;$('st'+k).innerHTML=`<span>座位利用率 <b>${(u*100).toFixed(0)}%</b></span><span>已完成 <b>${m.done.length}</b>/7</span>`;$('b'+k).style.width=(u*100)+'%';
+  $('q'+k).innerHTML='站台排队：'+(m.queue.length?m.queue.map(r=>r.n).join('、'):'无')})}
+function play(){if(timer){stop();return}$('play').textContent='⏸ 暂停';timer=setInterval(step,1000)}
+function stop(){clearInterval(timer);timer=null;$('play').textContent='▶ 播放'}
+$('play').onclick=play;$('step').onclick=()=>{stop();step()};$('reset').onclick=()=>{stop();init()};init();
+
+// ---------- part 2
+const W=1000;
+function timeline(chunk){const rows={U1:[],U2:[],U3:[],N:[]},pf=[];let tt=0;
+ for(let i=0;i<3;i++){tt+=20;['U1','U2','U3'].forEach(u=>rows[u].push(tt))}
+ if(!chunk){pf.push([60,540]);tt=540;rows.N.push(540)}
+ else{for(let c=0;c<8;c++){pf.push([tt,tt+80]);tt+=80;['U1','U2','U3'].forEach(u=>rows[u].push(tt))}rows.N.push(tt)}
+ while(tt+20<=W){tt+=20;['U1','U2','U3','N'].forEach(u=>rows[u].push(tt))}
+ return{rows,pf}}
+function gapMax(a){let g=0;for(let i=1;i<a.length;i++)g=Math.max(g,a[i]-a[i-1]);return g}
+function drawTL(chunk){const {rows,pf}=timeline(chunk);let h='';
+ Object.entries(rows).forEach(([u,ts])=>{h+=`<div class="trow"><div class="lab">${u==='N'?'N（新，长文档）':u+'（在聊）'}</div><div class="track">`;
+  if(u==='N')pf.forEach((p,i)=>h+=`<div class="pf" style="left:${p[0]/W*100}%;width:${(p[1]-p[0])/W*100}%">${chunk?'段'+(i+1):'prefill 8000 token'}</div>`);
+  else{for(let i=1;i<ts.length;i++)if(ts[i]-ts[i-1]>100)h+=`<div class="gap" style="left:${ts[i-1]/W*100}%;width:${(ts[i]-ts[i-1])/W*100}%"></div>`}
+  ts.forEach(x=>h+=`<div class="tick" style="left:calc(${x/W*100}% - 3px)"></div>`);h+='</div></div>'});
+ $('tl').innerHTML=h;
+ const g=gapMax(rows.U1),ttft=rows.N[0]-60;
+ $('kpi').innerHTML=`<div>U1~U3 最长卡顿<b style="color:${g>100?'#dc2626':'#16a34a'}">${g} ms</b></div><div>N 的首字延迟 TTFT<b>${ttft} ms</b></div><div>1 秒内 U1 收到的字<b>${rows.U1.length}</b></div>`;
+ $('tlex').innerHTML=chunk?`<b>切块</b>：8000 token 切成 8 段，每一步做一段 prefill + 大家的 decode（这一步变长到 80 ms）。U1~U3 每 80 ms 照样出一个字，<b>不会卡住</b>；代价是 N 的首字晚了一点（${ttft} ms vs 480 ms），以及这段时间别人的出字速度变慢。vLLM 里对应参数：<code>--enable-chunked-prefill</code>、<code>--max-num-batched-tokens</code>。`
+  :`<b>不切块</b>：N 的 prefill 是一整步，占了 480 ms，这期间 GPU 全在给 N 算，<b>U1~U3 一个字都收不到</b>（红色斜线 = 卡住），用户看到的就是"突然卡了半秒"。`}
+$('m0').onclick=()=>{$('m0').classList.add('on');$('m1').classList.remove('on');drawTL(false)};
+$('m1').onclick=()=>{$('m1').classList.add('on');$('m0').classList.remove('on');drawTL(true)};drawTL(false);
+</script></body></html>

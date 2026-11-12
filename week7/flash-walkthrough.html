@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>一步一步看：推理时 Q K V 怎么搬</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--card:#fff;--line:#e5e2db;--empty:#efede8;--acc:#c2410c;--hl:#fde68a}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#3a3c41;--empty:#2c2e32;--acc:#fb923c;--hl:#a16207}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:2px 0 4px}
+.note{color:var(--mute);font-size:13px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5}
+button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:#2563eb;color:#fff;border-color:#2563eb}
+.dots{display:flex;gap:4px;flex-wrap:wrap}.dot{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);font-size:11px;display:grid;place-items:center;cursor:pointer}
+.dot.on{background:#2563eb;color:#fff;border-color:#2563eb}.dot.dec{border-color:#9333ea}
+.explain{background:var(--card);border:1px solid var(--line);border-left:5px solid #2563eb;border-radius:10px;padding:12px 16px;margin:8px 0 12px;min-height:110px}
+.explain h3{margin:0 0 6px;font-size:17px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+.panel>.hd{font-weight:600;margin-bottom:6px}
+.mats{display:flex;gap:22px;row-gap:14px;flex-wrap:wrap;align-items:flex-start}
+.mat .lab{font-size:13px;font-weight:600;text-align:center;margin-bottom:2px}
+.mat .sub{font-size:11px;color:var(--mute);text-align:center}
+.row{display:flex;align-items:center;gap:3px;height:20px;margin:2px 0;position:relative}
+.rn{width:22px;font-size:10px;color:var(--mute);text-align:right;padding-right:2px}
+.c{width:14px;height:14px;border-radius:3px;background:var(--empty)}
+.row.hl{outline:2px solid var(--acc);outline-offset:1px;border-radius:3px}
+.tag{position:absolute;right:-6px;top:-11px;font-size:10px;line-height:14px;padding:0 4px;border-radius:4px;background:var(--acc);color:#fff;white-space:nowrap;font-weight:600;z-index:2}
+.ghost{display:grid;grid-template-columns:repeat(8,12px);gap:2px;padding:4px;border:2px dashed var(--line);border-radius:6px}
+.ghost div{width:12px;height:12px;border-radius:2px;background:transparent;border:1px solid var(--line)}
+.sms{display:flex;gap:12px;flex-wrap:wrap}
+.sm{flex:1;min-width:300px;border:2px solid var(--line);border-radius:12px;padding:10px}
+.sm.active{border-color:#2563eb}
+.sm .hd{font-weight:600}
+.sram{border:1px dashed var(--mute);border-radius:8px;padding:8px;margin-top:6px;min-height:150px}
+.sram .t{font-size:12px;color:var(--mute);margin-bottom:4px}
+.sgrid{display:inline-grid;gap:3px;vertical-align:top}
+.sc{width:34px;height:24px;border-radius:4px;font-size:11px;display:grid;place-items:center;background:#dbeafe;color:#1e3a8a}
+.sc.mask{background:repeating-linear-gradient(45deg,var(--empty) 0 4px,transparent 4px 8px);color:var(--mute)}
+@media (prefers-color-scheme:dark){.sc{background:#1e3a8a;color:#dbeafe}}
+.stat{font-size:13px;margin-top:6px;font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--mute)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;background:var(--b)}
+.flow{font-size:13px;text-align:center;color:var(--acc);font-weight:600;margin:4px 0}
+table.m{border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;margin-top:6px}
+table.m td,table.m th{border:1px solid var(--line);padding:3px 8px;text-align:center}
+</style></head><body><div class="wrap">
+<h1>一步一步看：推理时 Q、K、V 怎么搬进 SRAM</h1>
+<p class="note">小例子：提示词 8 个 token，每个向量 4 维（真实是 128），每块 2 个 token（真实 128），GPU 只有 2 个工人（真实 A100 有 108 个）。只看一层的一个头，其他层和头完全一样地重复。</p>
+<div class="legend"><span style="--b:#3b82f6">块 1（token 1-2）</span><span style="--b:#16a34a">块 2（3-4）</span><span style="--b:#ea580c">块 3（5-6）</span><span style="--b:#9333ea">块 4（7-8）</span><span style="--b:#e11d48">第 9 个 token（decode）</span></div>
+
+<div class="ctrl"><button id="prev">← 上一步</button><button class="pri" id="next">下一步 →</button><div class="dots" id="dots"></div></div>
+<div class="explain" id="ex"></div>
+
+<div class="panel"><div class="hd">🏬 HBM 显存（仓库：大、远）</div>
+<div class="mats" id="hbm"></div></div>
+<div class="flow" id="flow"></div>
+<div class="panel"><div class="hd">🔧 GPU 计算单元（每个工人一张小工作台 = SRAM：小、快）</div>
+<div class="sms" id="sms"></div></div>
+</div>
+<script>
+const COL=['#3b82f6','#16a34a','#ea580c','#9333ea'],RED='#e11d48';
+const blk=r=>r<8?Math.floor(r/2):-1;
+const colOf=(r,cut)=>r==8?RED:(cut?COL[blk(r)]:'#94a3b8');
+const range=(a,b)=>Array.from({length:b-a+1},(_,i)=>a+i);
+// decode numbers: scores of q9 against k1..k9, v as one number for readability
+const S9=[1,3,0.5,4,2,2.5,1.5,3.5,0],V9=[10,20,30,40,50,60,70,80,90];
+function part(idx){const m=Math.max(...idx.map(i=>S9[i]));let l=0,o=0;idx.forEach(i=>{const e=Math.exp(S9[i]-m);l+=e;o+=e*V9[i]});return{m,l,o}}
+const P1=part(range(0,4)),P2=part(range(5,8));
+const M=Math.max(P1.m,P2.m),a1=Math.exp(P1.m-M),a2=Math.exp(P2.m-M),L=P1.l*a1+P2.l*a2,O=P1.o*a1+P2.o*a2;
+const f=(x,n=2)=>x.toFixed(n);
+
+const steps=[
+{t:'0. 起点：仓库里有什么',x:`HBM 里放着：<b>权重 Wq、Wk、Wv</b>（模型参数，一直都在），和你的提示词 8 个 token 的向量 <b>X</b>（8 行 × 4 列，每行一个 token）。<br>Q、K、V 现在<b>还不存在</b>，要先算出来。`,
+ X:1},
+{t:'1. 先用普通矩阵乘法算出 Q、K、V',x:`Q = X @ Wq，K = X @ Wk，V = X @ Wv。这一步就是 L1 讲的矩阵乘法（W 从仓库搬一次，8 个 token 一起用 → prefill 是算力受限）。<br>算完<b>写回 HBM</b>：Q、K、V 各是 8×4，每行对应一个 token。<br>⭐ 其中 <b>K 和 V 会一直留着</b>，这就是 <b>KV Cache</b>，后面生成新 token 时要用。`,
+ X:1,QKV:1,hl:{Q:range(0,7),K:range(0,7),V:range(0,7)},flow:'↑ 计算结果写回仓库'},
+{t:'2. 切块：每 2 个 token 一块',x:`Q 切成 4 块（每块 2 个 query token）→ 为了<b>分工</b>：每个工人负责一块 Q，算出这 2 个 token 的输出。<br>K、V 也切成 4 块（每块 2 个 token）→ 为了<b>塞进 SRAM</b>：工作台太小，一次只能放一块 K 和一块 V。<br>右边虚线框是 8×8 的分数表：普通注意力会把它整张写进仓库，<b>Flash 永远不写它</b>，看它到最后都是空的。`,
+ X:1,QKV:1,cut:1},
+{t:'3. 分工：工人 1 领 Q 块 1，工人 2 领 Q 块 2',x:`工人 1 把 <b>token 1、2 的 q</b> 搬上自己的工作台；工人 2 搬 <b>token 3、4 的 q</b>。<br>它们会一直放在工作台上，直到这两个 token 的输出算完。<br>每个工人还准备 3 个小记事本：每行的 <b>m</b>（目前最大分数）、<b>l</b>（目前 e 的和）、<b>O</b>（目前的加权和），一开始 m=−∞，l=0，O=0。`,
+ X:1,QKV:1,cut:1,hl:{Q:[0,1,2,3]},tags:{Q:{0:'→工人1',1:'→工人1',2:'→工人2',3:'→工人2'}},flow:'↓ Q 块搬入 SRAM',
+ sm:[{q:[0,1]},{q:[2,3]}]},
+{t:'4. 第 1 轮：两人都搬 K 块 1、V 块 1',x:`两个工人都把 <b>token 1、2 的 k 和 v</b> 搬上来（K、V 是同一批 token 一起搬）。<br>工人 1：q1,q2 × k1,k2 → 2×2 分数块。但 <b>token 1 不能看 token 2</b>（未来的词，因果遮罩），右上角那格作废。<br>工人 2：q3,q4 × k1,k2 → 2×2 分数块，全有效（3、4 都能看 1、2）。<br>然后在工作台上：更新 m → 取 e → 更新 l → <b>O += 权重 × v</b>。分数块用完就扔，不写回仓库。`,
+ X:1,QKV:1,cut:1,hl:{K:[0,1],V:[0,1]},tags:{K:{0:'→工人1、2'},V:{0:'→工人1、2'}},flow:'↓ K 块 1、V 块 1 搬入两个工作台',
+ sm:[{q:[0,1],kv:[0,1],note:'更新 m、l、O（第 1 轮）'},{q:[2,3],kv:[0,1],note:'更新 m、l、O（第 1 轮）'}]},
+{t:'5. 第 2 轮：工人 1 收工，工人 2 搬 K 块 2',x:`工人 1：K 块 2 是 token 3、4，对 token 1、2 来说全是未来 → <b>整块跳过</b>（因果遮罩省掉一半计算）。所以工人 1 已经看完了：<b>O ÷ l</b>（最后统一相除），把 token 1、2 的输出写回仓库。<br>工人 2：搬 <b>K 块 2、V 块 2</b>（token 3、4），q3,q4 × k3,k4，token 3 不能看 4，右上角作废。更新完后也收工：O ÷ l，写回 token 3、4 的输出。`,
+ X:1,QKV:1,cut:1,O:[0,1,2,3],hl:{K:[2,3],V:[2,3],O:[0,1,2,3]},tags:{K:{2:'→工人2'},V:{2:'→工人2'},O:{0:'←工人1 写回',2:'←工人2 写回'}},flow:'↓ K/V 块 2 搬给工人 2　　↑ 两人把输出 O 写回',
+ sm:[{q:[0,1],kv:null,note:'K 块 2 全是未来，跳过 → O÷l → 写回 ✅',done:1},{q:[2,3],kv:[2,3],note:'第 2 轮更新 → O÷l → 写回 ✅',done:1}]},
+{t:'6. 下一批：工人 1 领 Q 块 3，工人 2 领 Q 块 4',x:`工作台清空，领新任务：工人 1 搬 <b>token 5、6 的 q</b>，工人 2 搬 <b>token 7、8 的 q</b>。<br>这次它们要扫过更多 K/V 块：token 5、6 能看 1~6（3 块），token 7、8 能看 1~8（4 块）。<br>还是一样：K/V 一块一块搬上来，分数用完就扔。`,
+ X:1,QKV:1,cut:1,O:[0,1,2,3],hl:{Q:[4,5,6,7]},tags:{Q:{4:'→工人1',6:'→工人2'}},flow:'↓ 新的 Q 块搬入',
+ sm:[{q:[4,5]},{q:[6,7]}]},
+{t:'7. 第 1~2 轮：K/V 块 1、2 依次搬上来',x:`第 1 轮两人都搬 K/V 块 1（token 1、2），第 2 轮都搬块 2（token 3、4）。这些全是过去的 token，分数全有效。<br>每轮结束：分数块扔掉，只更新 m、l、O。<b>注意 m 变大时，旧的 l、O 要乘 e^(m旧−m新) 补救</b>（L2 练习 2，不补救就错）。<br>（为了少点几下，这里两轮合成一步。）`,
+ X:1,QKV:1,cut:1,O:[0,1,2,3],hl:{K:[0,1,2,3],V:[0,1,2,3]},tags:{K:{0:'第1轮',2:'第2轮'}},flow:'↓ K/V 块 1、2 依次搬入',
+ sm:[{q:[4,5],kv:[2,3],note:'已扫块 1、2'},{q:[6,7],kv:[2,3],note:'已扫块 1、2'}]},
+{t:'8. 第 3~4 轮：全部完成',x:`第 3 轮：两人都搬 K/V 块 3（token 5、6）。工人 1 这块是对角块，token 5 不能看 6。工人 1 收工：O÷l，写回 token 5、6 的输出。<br>第 4 轮：只有工人 2 搬 K/V 块 4（token 7、8），对角块，token 7 不能看 8。收工，写回 token 7、8。<br>🎉 8 个 token 的注意力输出全部完成。<b>看右上虚线框：8×8 分数表始终是空的</b>，仓库只经历了"Q、K、V 读进去，O 写出来"。`,
+ X:1,QKV:1,cut:1,O:range(0,7),hl:{K:[4,5,6,7],V:[4,5,6,7],O:[4,5,6,7]},tags:{K:{4:'第3轮',6:'第4轮(工人2)'},O:{4:'←工人1',6:'←工人2'}},flow:'↓ K/V 块 3、4　　↑ 输出写回',
+ sm:[{q:[4,5],kv:[4,5],note:'块 3 → O÷l → 写回 ✅',done:1},{q:[6,7],kv:[6,7],note:'块 3、4 → O÷l → 写回 ✅',done:1}]},
+{t:'9. prefill 小结：之后发生什么',x:`注意力输出 O 接着去乘 Wo、过 FFN，进入下一层；32 层每层都重复第 1~8 步。最后一层输出第 1 个新词（这就是<b>首字延迟 TTFT</b>）。<br><b>重点：每一层的 K、V 都留在仓库里</b> = KV Cache；Q 用完就丢（以后不会再有人来查 token 1~8 的 q）。下一步就要用它。<br>普通注意力在这里会多出 4 趟 8×8 表的读写；T=32K 时这张表一个头就 2 GB。`,
+ X:1,QKV:1,cut:1,O:range(0,7)},
+{dec:1,t:'10. decode：生成第 9 个 token',x:`第 1 个新词出来了，把它的向量 x9 放进来（只有 <b>1 行</b>）。<br>用矩阵乘法算 q9、k9、v9（W 又从仓库搬一遍，但只给 1 个 token 用 → L1 说的<b>搬运受限</b>）。<br>⭐ k9、v9 <b>追加</b>到 KV Cache 末尾（现在 9 行）。q9 不用存，只这一步用。<br>❗ token 1~8 的 k、v <b>不用重算</b>，直接从缓存拿，这就是 KV Cache 的意义。`,
+ X:1,QKV:1,cut:1,O:range(0,7),x9:1,kv9:1,hl:{K:[8],V:[8]},tags:{K:{8:'追加进缓存'},V:{8:'追加进缓存'}},flow:'↑ k9、v9 写进 KV Cache'},
+{dec:1,t:'11. 只有 1 个 query，怎么分工？切 KV Cache',x:`现在 Q 只有 q9 一行，没法按 Q 分工了。换个切法：<b>把 9 行 KV Cache 切成两段</b>。<br>工人 1 拿 token 1~5 的 k、v，工人 2 拿 token 6~9 的 k、v；<b>两人各拿一份 q9</b>。<br>这叫 Flash-Decoding。上下文越长，KV Cache 越长，分给越多工人一起扫。`,
+ X:1,QKV:1,cut:1,O:range(0,7),x9:1,kv9:1,hl:{K:range(0,8),V:range(0,8)},tags:{K:{0:'1~5 →工人1',5:'6~9 →工人2'}},flow:'↓ q9 复制给两人；KV Cache 分两段搬入',
+ sm:[{q9:1,kv:range(0,4),dec:1},{q9:1,kv:range(5,8),dec:1}]},
+{dec:1,t:'12. 各算各的：每人得到自己那段的 m、l、o',x:`为了看清，把 v 当成一个数（真实是 128 维向量，做法一样）。<br>每个工人在工作台上：算 q9 和自己那几个 k 的分数 → 找最大值 m → 取 e 加起来得 l → 用 e 加权 v 得 o。<br><b>注意：现在还不能相除</b>，因为每人只看到了一半，各自的 l 不是"整行总和"。`,
+ X:1,QKV:1,cut:1,O:range(0,7),x9:1,kv9:1,
+ sm:[{q9:1,kv:range(0,4),dec:1,nums:1,P:P1},{q9:1,kv:range(5,8),dec:1,nums:1,P:P2}]},
+{dec:1,t:'13. 合并：用补救公式把两半拼起来',x:`把两人的 (m, l, o) 合起来，用的就是 L2 的补救公式：<br>m = max(${f(P1.m,1)}, ${f(P2.m,1)}) = <b>${f(M,1)}</b><br>l = ${f(P1.l,3)} × e^(${f(P1.m,1)}−${f(M,1)}) + ${f(P2.l,3)} × e^(${f(P2.m,1)}−${f(M,1)}) = <b>${f(L,3)}</b><br>o = ${f(P1.o,2)} × ${f(a1,3)} + ${f(P2.o,2)} × ${f(a2,3)} = <b>${f(O,2)}</b><br>输出 = o ÷ l = <b>${f(O/L,3)}</b>（<b>最后才相除</b>）。直接对 9 个分数做普通 softmax 加权，答案一样。<br>写回仓库，然后继续 Wo → FFN → 下一层……最后吐出第 10 个 token 的输入。`,
+ X:1,QKV:1,cut:1,O:range(0,8),x9:1,kv9:1,hl:{O:[8]},tags:{O:{8:'←合并后写回'}},flow:'↑ 合并结果写回',merge:1,
+ sm:[{q9:1,kv:range(0,4),dec:1,nums:1,P:P1,done:1},{q9:1,kv:range(5,8),dec:1,nums:1,P:P2,done:1}]},
+{dec:1,t:'14. 总结：prefill vs decode',x:`<table class="m"><tr><th></th><th>prefill（读提示词）</th><th>decode（每次出 1 个词）</th></tr>
+<tr><td>Q 有几行</td><td>8 行（整段一起）</td><td>1 行（q9）</td></tr>
+<tr><td>怎么分工</td><td>按 Q 切块，每个工人一块 Q</td><td>按 KV Cache 切段，每人一段，最后合并</td></tr>
+<tr><td>K、V 从哪来</td><td>当场算，并存进 KV Cache</td><td>旧的从缓存读，只算新的一行追加</td></tr>
+<tr><td>仓库读写</td><td>读 Q K V，写 O，分数表不落地</td><td>读全部 W + <b>读整个 KV Cache</b>，写 1 行</td></tr>
+<tr><td>瓶颈</td><td>算力（TTFT）</td><td>搬运（TPOT）</td></tr></table>
+decode 每一步都要把<b>整个 KV Cache 读一遍</b>，上下文越长越慢、越占显存。怎么管好这块显存，就是 L3 vLLM 的内容。`,
+ X:1,QKV:1,cut:1,O:range(0,8),x9:1,kv9:1}
+];
+
+let cur=0;
+function matHTML(name,label,sub,rows,st,filled){
+ let h=`<div class="mat"><div class="lab">${label}</div><div class="sub">${sub}</div>`;
+ rows.forEach(r=>{const hl=st.hl&&st.hl[name]&&st.hl[name].includes(r);const tag=st.tags&&st.tags[name]&&st.tags[name][r];
+  const on=filled(r);const c=on?colOf(r,st.cut):'';
+  h+=`<div class="row ${hl?'hl':''}"><span class="rn">${r==8?'t9':'t'+(r+1)}</span>${('<span class="c" style="background:'+(on?c:'')+'"></span>').repeat(4)}${tag?`<span class="tag">${tag}</span>`:''}</div>`});
+ return h+'</div>'}
+function render(){
+ const st=steps[cur];
+ $('ex').innerHTML=`<h3>${st.t}</h3>${st.x}`;$('ex').style.borderLeftColor=st.dec?'#9333ea':'#2563eb';
+ const n=st.kv9?9:8,rowsX=range(0,n-1);
+ let h='';
+ h+=matHTML('X','X 输入向量','每行一个 token',rowsX,st,r=>r<8||st.x9);
+ h+=`<div class="mat"><div class="lab">Wq Wk Wv</div><div class="sub">权重（一直在）</div><div style="width:60px;height:60px;margin:6px auto;border-radius:6px;background:#64748b;opacity:.5"></div></div>`;
+ h+=matHTML('Q',st.dec?'Q（旧的已丢弃）':'Q',st.dec?'Q 不缓存，只留 q9':'',st.kv9?[...range(0,7),8]:range(0,7),st,r=>st.QKV&&(st.dec?r==8:r<8));
+ h+=matHTML('K','K'+(st.QKV?'（KV Cache）':''),'',rowsX,st,r=>st.QKV&&(r<8||st.kv9));
+ h+=matHTML('V','V'+(st.QKV?'（KV Cache）':''),'',rowsX,st,r=>st.QKV&&(r<8||st.kv9));
+ h+=matHTML('O','O 注意力输出','',rowsX,st,r=>st.O&&st.O.includes(r));
+ h+=`<div class="mat"><div class="lab">8×8 分数表</div><div class="sub">普通注意力写这里<br>Flash 从不写 → 一直空</div><div class="ghost">${'<div></div>'.repeat(64)}</div></div>`;
+ $('hbm').innerHTML=h;
+ $('flow').textContent=st.flow||'';
+ // SMs
+ let s='';
+ [0,1].forEach(w=>{const sm=st.sm&&st.sm[w];
+  s+=`<div class="sm ${sm?'active':''}"><div class="hd">工人 ${w+1}（SM${w+1}）${sm&&sm.done?' ✅':''}</div><div class="sram"><div class="t">SRAM 工作台</div>`;
+  if(!sm){s+='<div class="note">空闲</div>'}
+  else{
+   const qrows=sm.q9?[8]:sm.q;
+   s+='<div style="display:flex;gap:14px;flex-wrap:wrap">';
+   s+=`<div><div class="t">Q 块</div>${qrows.map(r=>`<div class="row"><span class="rn">${r==8?'q9':'q'+(r+1)}</span>${('<span class="c" style="background:'+colOf(r,1)+'"></span>').repeat(4)}</div>`).join('')}</div>`;
+   if(sm.kv){
+    s+=`<div><div class="t">K 块</div>${sm.kv.map(r=>`<div class="row"><span class="rn">k${r+1}</span>${('<span class="c" style="background:'+colOf(r,1)+'"></span>').repeat(4)}</div>`).join('')}</div>`;
+    s+=`<div><div class="t">V 块</div>${sm.kv.map(r=>`<div class="row"><span class="rn">v${r+1}</span>${('<span class="c" style="background:'+colOf(r,1)+'"></span>').repeat(4)}</div>`).join('')}</div>`;
+    // score tile
+    s+=`<div><div class="t">分数块（用完就扔）</div><div class="sgrid" style="grid-template-columns:repeat(${sm.kv.length},34px)">`;
+    qrows.forEach(qr=>sm.kv.forEach(kr=>{const mask=!sm.dec&&kr>qr;const val=sm.nums?S9[kr]:'';s+=`<div class="sc ${mask?'mask':''}" title="q${qr+1}·k${kr+1}">${mask?'✕':(sm.nums?val:'q'+(qr==8?9:qr+1)+'k'+(kr+1))}</div>`}));
+    s+='</div></div>';
+   }
+   s+='</div>';
+   if(sm.P)s+=`<div class="stat">v = [${sm.kv.map(r=>V9[r]).join(', ')}]<br>m = ${f(sm.P.m,1)}　l = ${f(sm.P.l,3)}　o = ${f(sm.P.o,2)}　<span class="note">（还没除）</span></div>`;
+   else s+=`<div class="stat">记事本：m、l、O（每行一份）${sm.note?'　· '+sm.note:''}</div>`;
+  }
+  s+='</div></div>'});
+ $('sms').innerHTML=s;
+ [...$('dots').children].forEach((d,i)=>d.classList.toggle('on',i==cur));
+ $('prev').disabled=cur==0;$('next').disabled=cur==steps.length-1;
+}
+const $=id=>document.getElementById(id);
+steps.forEach((st,i)=>{const d=document.createElement('div');d.className='dot'+(st.dec?' dec':'');d.textContent=i;d.title=st.t;d.onclick=()=>{cur=i;render()};$('dots').appendChild(d)});
+$('next').onclick=()=>{if(cur<steps.length-1){cur++;render()}};$('prev').onclick=()=>{if(cur>0){cur--;render()}};
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight')$('next').click();if(e.key==='ArrowLeft')$('prev').click()});
+render();
+</script></body></html>

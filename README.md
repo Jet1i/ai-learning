@@ -34,6 +34,11 @@
 | week6/llama_block.py | LLaMA 块：RMSNorm、SwiGLU、参数量复算 |
 | week6/rope.py | RoPE 旋转位置编码 |
 | week6/gqa.py | KV Cache 与 GQA：显存与并发估算 |
+| week7/roofline.py | 屋顶线：batch 实测 + GPU 搬运受限估算 |
+| week7/flash.py | FlashAttention：online softmax + 分块注意力（numpy） |
+| week7/paged.py | vLLM PagedAttention：预留 vs 分页的并发模拟 |
+| week7/quant.py | 量化：int8 / int4、分组量化与误差 |
+| week7/*.html | 本周交互 demo（屋顶线、Flash 拆解、vLLM 酒店、连续批处理、量化） |
 
 ## 运行
 ```bash

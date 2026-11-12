@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>量化：把权重吸到刻度上</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--card:#fff;--line:#e5e2db;--o:#2563eb;--q:#ea580c}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#3a3c41;--o:#60a5fa;--q:#fb923c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:2px 0 4px}
+.note{color:var(--mute);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0}
+.ctrl{display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+.seg button{font:inherit;padding:5px 12px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+.seg button:first-child{border-radius:8px 0 0 8px}.seg button:last-child{border-radius:0 8px 8px 0}
+.seg button.on{background:var(--fg);color:var(--bg)}
+svg text{fill:var(--mute);font-size:11px}
+.kpi{display:flex;gap:12px;flex-wrap:wrap}
+.kpi div{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 12px;min-width:150px}
+.kpi b{display:block;font-size:20px}
+table{border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;width:100%}
+td,th{border-bottom:1px solid var(--line);padding:3px 6px;text-align:center}
+td.bad{color:#dc2626;font-weight:600}
+.legend{font-size:12px;color:var(--mute)}
+</style></head><body><div class="wrap">
+<h1>量化：把每个权重"吸"到最近的刻度上</h1>
+<p class="note">蓝点 = 原来的权重（fp16）。灰色竖线 = 能存的刻度（int8 有 255 个，int4 只有 15 个）。橙点 = 吸过去之后的值。蓝点和橙点离得越远，误差越大。</p>
+<div class="card ctrl">
+ <div>位数 <span class="seg" id="bits"><button data-v="8">int8</button><button data-v="4" class="on">int4</button><button data-v="3">int3</button><button data-v="2">int2</button></span></div>
+ <div>异常值 <span class="seg" id="out"><button data-v="0" class="on">没有</button><button data-v="1">第 2 组混进一个 3.0</button></span></div>
+ <div>刻度 <span class="seg" id="grp"><button data-v="0" class="on">整体一个刻度</button><button data-v="1">每组一个刻度</button></span></div>
+</div>
+<div class="card"><svg id="svg" viewBox="0 0 900 230" width="100%"></svg><div class="legend"><span style="color:var(--o)">●</span> 原权重　<span style="color:var(--q)">●</span> 量化后　灰线 = 可用刻度</div></div>
+<div class="card kpi" id="kpi"></div>
+<div class="card"><table id="tb"></table></div>
+<div class="card" id="msg"></div>
+</div>
+<script>
+const G1=[0.12,-0.53,0.98,-0.09,0.35,-0.27,0.61,-0.80],G2b=[0.05,-0.21,0.44,-0.66,0.18,0.73,-0.38,0.29];
+const st={bits:4,out:0,grp:0};
+document.querySelectorAll('.seg').forEach(seg=>seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{seg.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');st[seg.id]=+b.dataset.v;draw()}));
+function q(ws,scale,qmax){return ws.map(w=>{const i=Math.max(-qmax,Math.min(qmax,Math.round(w/scale)));return{w,i,b:i*scale}})}
+function draw(){const qmax=2**(st.bits-1)-1;const G2=G2b.slice();if(st.out)G2[5]=3.0;
+ const all=[...G1,...G2];const sAll=Math.max(...all.map(Math.abs))/qmax;
+ const s1=st.grp?Math.max(...G1.map(Math.abs))/qmax:sAll,s2=st.grp?Math.max(...G2.map(Math.abs))/qmax:sAll;
+ const R=[q(G1,s1,qmax),q(G2,s2,qmax)];
+ let h='';const L=60,Rr=880;
+ [[R[0],s1,'第 1 组',20],[R[1],s2,'第 2 组',125]].forEach(([res,s,name,y0])=>{
+  const lim=Math.max(...res.map(r=>Math.abs(r.w)),s*qmax)*1.05;const X=v=>L+(v+lim)/(2*lim)*(Rr-L);
+  h+=`<text x="4" y="${y0+45}" style="font-weight:600;fill:currentColor">${name}</text><text x="4" y="${y0+60}">刻度 ${s.toFixed(3)}</text>`;
+  h+=`<line x1="${L}" x2="${Rr}" y1="${y0+45}" y2="${y0+45}" stroke="currentColor" opacity=".25"/>`;
+  const nL=2*qmax+1;if(nL<=31){for(let k=-qmax;k<=qmax;k++)h+=`<line x1="${X(k*s)}" x2="${X(k*s)}" y1="${y0+20}" y2="${y0+70}" stroke="currentColor" opacity=".18"/>`}
+  else h+=`<rect x="${X(-qmax*s)}" y="${y0+20}" width="${X(qmax*s)-X(-qmax*s)}" height="50" fill="currentColor" opacity=".06"/><text x="${X(0)}" y="${y0+16}" text-anchor="middle">255 根刻度太密，画成灰底</text>`;
+  h+=`<text x="${X(0)}" y="${y0+88}" text-anchor="middle">0</text>`;
+  res.forEach((r,i)=>{const yo=y0+30+(i%2)*14;h+=`<line x1="${X(r.w)}" x2="${X(r.b)}" y1="${yo}" y2="${y0+60}" stroke="var(--q)" stroke-width="1" opacity=".6"/><circle cx="${X(r.w)}" cy="${yo}" r="5" fill="var(--o)"/><circle cx="${X(r.b)}" cy="${y0+60}" r="5" fill="var(--q)"/>`});
+ });
+ document.getElementById('svg').innerHTML=h;
+ const flat=[...R[0],...R[1]];const errs=flat.map(r=>Math.abs(r.b-r.w));const normal=flat.filter(r=>Math.abs(r.w)<2);
+ const zeros=normal.filter(r=>r.i===0&&Math.abs(r.w)>0.04).length;
+ const rel=Math.sqrt(normal.reduce((a,r)=>a+(r.b-r.w)**2,0)/normal.reduce((a,r)=>a+r.w**2,0));
+ const bitsEff=st.bits+(st.grp?16/128:0);
+ document.getElementById('kpi').innerHTML=`<div>普通权重的相对误差<b style="color:${rel>0.15?'#dc2626':rel>0.05?'#ca8a04':'#16a34a'}">${(rel*100).toFixed(1)}%</b></div><div>被压成 0 的权重<b>${zeros} 个</b></div><div>每个参数<b>${bitsEff.toFixed(3).replace(/\.?0+$/,'')} bit</b></div><div>70B 模型大小<b>${(70*bitsEff/8).toFixed(0)} GB</b></div>`;
+ document.getElementById('tb').innerHTML='<tr><th>组</th><th>原权重 w</th><th>w ÷ 刻度</th><th>存下的整数</th><th>乘回来</th><th>误差</th></tr>'+flat.map((r,k)=>{const s=k<8?s1:s2;const e=Math.abs(r.b-r.w);return `<tr><td>${k<8?1:2}</td><td>${r.w}</td><td>${(r.w/s).toFixed(2)}</td><td>${r.i}</td><td>${r.b.toFixed(3)}</td><td class="${e>0.1?'bad':''}">${e.toFixed(3)}</td></tr>`}).join('');
+ let m='';
+ if(st.out&&!st.grp)m=`<b>异常值毁了所有人</b>：3.0 让刻度变成 ${sAll.toFixed(3)}，${st.bits<=4?'大部分普通权重除以刻度后不到 0.5，直接被压成 0。':'普通权重的精度明显变差。'}试试切到"每组一个刻度"：异常值只会拖累第 2 组，第 1 组恢复精细。`;
+ else if(st.out&&st.grp)m=`<b>分组救回了第 1 组</b>：第 1 组用自己的刻度 ${s1.toFixed(3)}，完全不受 3.0 影响。第 2 组还是被拖累（真实中一组 128 个，只有这一小组倒霉）。代价：每 128 个参数多存一个刻度，平均多 0.125 bit。`;
+ else if(st.bits>=8)m='<b>int8</b>：刻度很细，橙点几乎和蓝点重合，误差可以忽略。所以 int8 / FP8 被认为"基本无损"。';
+ else if(st.bits===4)m='<b>int4</b>：只有 15 根刻度，能看到蓝点被"吸"过去一段距离。真实模型比较耐这点噪声，加上 AWQ/GPTQ 的优化，一般只掉 1~2 个点。';
+ else m=`<b>int${st.bits}</b>：刻度只剩 ${2*qmax+1} 根，很多权重被吸到 0 或同一个值上，信息大量丢失。int3、int2 目前效果明显变差，很少用于生产。`;
+ document.getElementById('msg').innerHTML=m;}
+draw();
+</script></body></html>

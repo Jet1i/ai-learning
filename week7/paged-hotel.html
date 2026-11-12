@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>vLLM 酒店：预留整段 vs 分页</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#6b6f76;--card:#fff;--line:#e5e2db;--empty:#f1efea}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e6e3;--mute:#9a9ea5;--card:#222326;--line:#3a3c41;--empty:#2a2c30}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:2px 0 4px}
+.note{color:var(--mute);font-size:13px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;position:sticky;top:0;background:var(--bg);padding:6px 0;z-index:3}
+button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:#2563eb;color:#fff;border-color:#2563eb}
+.guests{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
+.g{border-radius:8px;padding:2px 10px;color:#fff;font-size:13px}
+.cols{display:flex;gap:14px;flex-wrap:wrap}
+.side{flex:1;min-width:330px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.side h2{font-size:17px;margin:0 0 4px}
+.rooms{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;margin:8px 0}
+.room{aspect-ratio:1;border-radius:6px;background:var(--empty);border:1px solid var(--line);display:grid;place-items:center;font-size:11px;font-weight:600;color:#fff;position:relative;transition:all .25s}
+.room .no{position:absolute;top:1px;left:3px;font-size:9px;color:var(--mute);font-weight:400}
+.room.res{background:transparent;border:2px dashed var(--c)}
+.room.used{background:var(--c);border-color:var(--c)}
+.room.pg{border-left:3px solid var(--fg)}
+.stat{display:flex;gap:12px;flex-wrap:wrap;font-size:14px}
+.stat b{font-size:20px}
+.queue,.done,.pt{font-size:13px;margin-top:4px}
+.bar{height:12px;border-radius:6px;background:var(--empty);overflow:hidden;margin-top:4px}.bar div{height:100%;background:#16a34a;transition:width .25s}
+.explain{background:var(--card);border:1px solid var(--line);border-left:5px solid #2563eb;border-radius:10px;padding:10px 14px;margin:8px 0;min-height:60px}
+.legend{font-size:12px;color:var(--mute);display:flex;gap:14px;flex-wrap:wrap}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:4px}
+</style></head><body><div class="wrap">
+<h1>vLLM 酒店：预留整段 vs 分页（PagedAttention）</h1>
+<p class="note">显存 = 16 个房间，每间放 1 个 token 的 KV Cache。5 位客人（5 个请求）同时到店，入住时<b>不知道自己要住几晚</b>（回答多长生成完才知道），最长可能住 8 晚。每走一步 = 每位在住客人多生成 1 个 token（多住 1 晚）。</p>
+<div class="guests" id="guests"></div>
+<div class="legend"><span><i style="border:2px dashed #888"></i>预留了但空着（浪费）</span><span><i style="background:#888"></i>真的放了 KV</span><span>粗竖线 = 页的边界（分页那边每页 2 间）</span></div>
+<div class="ctrl"><button class="pri" id="play">▶ 播放</button><button id="step">走一步</button><button id="reset">重来</button><span class="note" id="tick"></span></div>
+<div class="explain" id="ex"></div>
+<div class="cols">
+<div class="side"><h2>朴素：每人按最长 8 晚，预留连续一整段</h2><div class="rooms" id="r0"></div><div class="stat" id="s0"></div><div class="bar"><div id="b0"></div></div><div class="queue" id="q0"></div><div class="done" id="d0"></div></div>
+<div class="side"><h2>vLLM：分页，每页 2 间，住满再给下一页</h2><div class="rooms" id="r1"></div><div class="stat" id="s1"></div><div class="bar"><div id="b1"></div></div><div class="queue" id="q1"></div><div class="pt" id="p1"></div><div class="done" id="d1"></div></div>
+</div>
+<div class="explain" style="border-left-color:#16a34a"><b>记住</b>：朴素做法浪费的是"<b>预留了但没住</b>"的房间，而且必须连续，导致后面的客人只能排队。分页按需给、不用连续，浪费只剩每人最后一页没住满的那一点。房间住满的比例越高，同时在住的客人越多 = batch 越大 = 整张卡吞吐越高（L1 的屋顶线）。</div>
+</div>
+<script>
+const N=16,MAXR=8,PG=2;
+const G=[{n:'A',len:3,c:'#2563eb'},{n:'B',len:5,c:'#ea580c'},{n:'C',len:4,c:'#16a34a'},{n:'D',len:2,c:'#9333ea'},{n:'E',len:3,c:'#db2777'}];
+const $=id=>document.getElementById(id);
+$('guests').innerHTML=G.map(g=>`<span class="g" style="background:${g.c}">${g.n}：实际住 ${g.len} 晚</span>`).join('')+'<span class="note">（这个数只有住完才知道）</span>';
+let S,t,timer=null,msg='';
+function init(){t=0;msg='点"走一步"开始。两家酒店同时接待同样的 5 位客人。';
+ S=[0,1].map(mode=>({mode,rooms:Array(N).fill(null),req:G.map(g=>({...g,st:'wait',made:0,rooms:[],pages:[]})),doneAt:{}}));render()}
+function freeRun(s,start,len){for(let i=start;i<start+len;i++)if(s.rooms[i])return false;return true}
+function stepMode(s){
+ const ev=[];
+ // admit
+ for(const r of s.req){if(r.st!=='wait')continue;
+  if(s.mode===0){let st=-1;for(let i=0;i+MAXR<=N;i++)if(freeRun(s,i,MAXR)){st=i;break}
+   if(st<0)break; r.rooms=[];for(let i=st;i<st+MAXR;i++){s.rooms[i]={n:r.n,used:false};r.rooms.push(i)} r.st='run';ev.push(`${r.n} 入住（预留 ${MAXR} 间）`)}
+  else{const fp=freePage(s);if(fp<0)break;r.st='run';ev.push(`${r.n} 入住`)}}
+ // generate
+ for(const r of s.req){if(r.st!=='run')continue;
+  if(s.mode===0){s.rooms[r.rooms[r.made]].used=true;r.made++}
+  else{if(r.made%PG===0){const fp=freePage(s);if(fp<0){ev.push(`${r.n} 等空页`);continue}r.pages.push(fp);for(let i=fp*PG;i<fp*PG+PG;i++)s.rooms[i]={n:r.n,used:false}}
+   const pg=r.pages[Math.floor(r.made/PG)];s.rooms[pg*PG+r.made%PG].used=true;r.made++}
+  if(r.made>=r.len){r.st='done';s.doneAt[r.n]=t;ev.push(`${r.n} 退房（房间马上空出来）`)}}
+ return ev}
+function freePage(s){for(let p=0;p<N/PG;p++){let ok=true;for(let i=p*PG;i<p*PG+PG;i++)if(s.rooms[i])ok=false;if(ok)return p}return -1}
+function cleanup(s){for(const r of s.req)if(r.st==='done'&&!r.freed){for(let i=0;i<N;i++)if(s.rooms[i]&&s.rooms[i].n===r.n)s.rooms[i]=null;r.freed=true}}
+function step(){if(S.every(s=>s.req.every(r=>r.st==='done'))){stop();return}
+ S.forEach(cleanup);t++;const e0=stepMode(S[0]),e1=stepMode(S[1]);S.forEach(cleanup);
+ const say=(s,e)=>e.join('，')||(s.req.every(r=>r.st==='done')?'全部住完 ✅':'在住的客人各多住一晚');
+ msg=`第 ${t} 步。<br>朴素：${say(S[0],e0)}<br>分页：${say(S[1],e1)}`;
+ if(S[1].req.every(r=>r.st==='done')&&!S[1].fin){S[1].fin=t}
+ if(S[0].req.every(r=>r.st==='done')&&!S[0].fin){S[0].fin=t}
+ if(S[0].fin&&S[1].fin)msg+=`<br><b>结果：5 位客人全部住完，朴素酒店用了 ${S[0].fin} 步，分页酒店只用了 ${S[1].fin} 步。</b>`;
+ render()}
+function color(n){return G.find(g=>g.n===n).c}
+function render(){$('tick').textContent=`第 ${t} 步`;$('ex').innerHTML=msg;
+ S.forEach((s,k)=>{let h='';s.rooms.forEach((r,i)=>{const pg=k===1&&i%PG===0;h+=`<div class="room ${r?(r.used?'used':'res'):''} ${pg?'pg':''}" style="--c:${r?color(r.n):'#888'}"><span class="no">${i+1}</span>${r&&r.used?r.n:(r?`<span style="color:${color(r.n)}">${r.n}</span>`:'')}</div>`});$('r'+k).innerHTML=h;
+  const used=s.rooms.filter(r=>r&&r.used).length,res=s.rooms.filter(r=>r&&!r.used).length,run=s.req.filter(r=>r.st==='run').length;
+  $('s'+k).innerHTML=`<span>在住 <b>${run}</b> 人</span><span>真用 <b>${used}</b>/16</span><span>预留空着 <b>${res}</b></span>`;
+  $('b'+k).style.width=(used/N*100)+'%';
+  const w=s.req.filter(r=>r.st==='wait').map(r=>r.n);$('q'+k).innerHTML='门口排队：'+(w.length?w.join('、'):'无');
+  const d=s.req.filter(r=>r.st==='done').map(r=>r.n);$('d'+k).innerHTML='已退房：'+(d.length?d.join('、'):'无');
+  if(k===1){$('p1').innerHTML='页表：'+s.req.filter(r=>r.st==='run').map(r=>`${r.n} → 第 ${r.pages.map(p=>p+1).join('、')} 页`).join('；')}});}
+function play(){if(timer){stop();return}$('play').textContent='⏸ 暂停';timer=setInterval(step,1100)}
+function stop(){clearInterval(timer);timer=null;$('play').textContent='▶ 播放'}
+$('play').onclick=play;$('step').onclick=()=>{stop();step()};$('reset').onclick=()=>{stop();init()};
+init();
+</script></body></html>
