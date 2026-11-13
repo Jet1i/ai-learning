@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MLA:KV cache 怎么被压扁</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;margin:0;background:#f7f7f5;color:#222}
+.wrap{max-width:860px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:4px 0}
+.sub{color:#666;font-size:14px;margin-bottom:14px}
+.card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:14px}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.steps button{border:1px solid #ccc;background:#fff;border-radius:16px;padding:6px 12px;cursor:pointer;font-size:13px}
+.steps button.on{background:#2b59c3;color:#fff;border-color:#2b59c3}
+.expl{font-size:15px;line-height:1.7;min-height:90px}
+.expl b{color:#2b59c3}
+.row{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:13px}
+.lab{width:70px;color:#555}
+.cell{height:22px;border-radius:3px;display:inline-block}
+.k{background:#2b59c3}.v{background:#e07b00}.c{background:#2a9d6f}.r{background:#9b59b6}
+.grid{min-height:230px}
+.num{font-family:Menlo,monospace}
+.ctrl button{border:none;background:#2b59c3;color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:4px;margin-right:14px;font-size:13px}
+.big{font-size:20px;font-weight:600}
+</style></head><body><div class="wrap">
+<h1>MLA:KV cache 怎么被压扁</h1>
+<div class="sub">每一格 = 存下来的一小段数字。看同样 4 个 token,每种方法要在显存里存多少。</div>
+<div class="card">
+<div class="steps" id="steps"></div>
+<div class="legend"><span><i class="cell k" style="width:14px"></i>k</span><span><i class="cell v" style="width:14px"></i>v</span><span><i class="cell c" style="width:14px"></i>压缩向量 c</span><span><i class="cell r" style="width:14px"></i>RoPE 小 k</span></div>
+<div class="grid" id="grid"></div>
+<div class="expl" id="expl"></div>
+<div class="ctrl"><button id="next">下一步 →</button></div>
+</div>
+<div class="card">
+<b>真实账本:DeepSeek-V3(61 层,128 头,每头 128 维,fp16)</b>
+<div class="row"><span class="lab">MHA</span><i class="cell k" style="width:300px"></i><span class="num">每 token 3904 KB · 128K 上下文 488 GB</span></div>
+<div class="row"><span class="lab">GQA 8 组</span><i class="cell k" style="width:19px"></i><span class="num">244 KB · 30 GB</span></div>
+<div class="row"><span class="lab">MLA</span><i class="cell c" style="width:6px"></i><span class="num">69 KB · 8.6 GB(比 MHA 小 57 倍)</span></div>
+<div class="row"><span class="lab">对照</span><i class="cell k" style="width:10px"></i><span class="num">LLaMA-3 8B GQA:128 KB/token</span></div>
+<div class="sub">一个 671B 的大模型,每个 token 的缓存比 8B 小模型还小。</div>
+</div>
+</div>
+<script>
+const U=14; // px per unit (one head-dim chunk)
+const steps=[
+{t:"① MHA",e:`普通多头注意力:每个 token,<b>每个头</b>都存一份 k 和一份 v。<br>玩具:4 个头 → 每 token 存 <b>8 段</b>。V3 有 128 个头 → 每 token 每层存 256 段(32768 个数)。`,
+ tok:()=>{let h="";for(let i=0;i<4;i++)h+=cell('k',1);for(let i=0;i<4;i++)h+=cell('v',1);return h},n:"8 段"},
+{t:"② GQA",e:`第 6 周学的 GQA:几个头<b>共用</b>一组 k、v。玩具:4 个头分 2 组 → 每 token 存 <b>4 段</b>。<br>代价:共用的头越多,每个头能"看"的角度越少,效果会掉。`,
+ tok:()=>cell('k',1)+cell('k',1)+cell('v',1)+cell('v',1),n:"4 段"},
+{t:"③ MLA:只存 c",e:`MLA 换个思路:不存 k、v,只存一个<b>压缩向量 c</b> = x · W_down(就是一个 wx,把 7168 维压到 512 维)。<br>要用的时候:k = c · W_uk,v = c · W_uv,<b>每个头</b>都能从同一个 c 展开出自己的 k、v,所以头还是 128 个,不像 GQA 那样共用。`,
+ tok:()=>cell('c',0.5),n:"0.5 段"},
+{t:"④ 朴素用法的问题",e:`朴素做法:每生成一个新 token,把前面<b>所有</b> token 的 c 都展开成 128 个头的 k、v,再做注意力。<br>上下文 10 万个 token 就要展开 10 万次 —— 显存省了,<b>计算多了一大堆</b>。`,
+ tok:()=>cell('c',0.5)+'<span style="color:#999">→ 展开 →</span>'+cell('k',1)+cell('k',1)+cell('k',1)+cell('k',1),n:"每步都展开"},
+{t:"⑤ 吸收技巧",e:`注意力只需要 q·k。而 q·k = q·(c W_uk) = <b>(q W_ukᵀ)·c</b>。<br>矩阵乘法可以换结合顺序:把 W_uk "吸收"进 q 里,<b>新 q 只算一次</b>,然后直接和每个 token 的 c 点乘,c 不用展开。v 那边同理,先在 c 上加权平均,最后只展开一次。mla.py 第 3/4 部分验证:两种算法结果完全一样。`,
+ tok:()=>cell('c',0.5),n:"不展开"},
+{t:"⑥ RoPE 的麻烦",e:`第 6 周的 RoPE 要按位置<b>旋转</b> k。旋转夹在 c 和 W_uk 中间,而且每个位置转的角度不同 → W_uk 就没法吸收进 q 了。<br>DeepSeek 的解法:<b>另外存一个很小的 k(64 维)专门带位置信息</b>,所有头共用。c 那部分不旋转,继续吸收。<br>最终每 token 每层存 512 + 64 = <b>576 个数</b>。`,
+ tok:()=>cell('c',0.5)+cell('r',0.0625*1),n:"576 个数"}
+];
+function cell(cls,w){return `<i class="cell ${cls}" style="width:${Math.max(4,w*U*4)}px"></i>`}
+let cur=0;
+function go(i){cur=i;const s=steps[i];
+ document.querySelectorAll('#steps button').forEach((b,j)=>b.classList.toggle('on',j===i));
+ let h="";for(let t=0;t<4;t++)h+=`<div class="row"><span class="lab">token ${t+1}</span>${s.tok()}</div>`;
+ h+=`<div class="row"><span class="lab"></span><span class="big">每 token:${s.n}</span></div>`;
+ document.getElementById('grid').innerHTML=h;
+ document.getElementById('expl').innerHTML=s.e;
+ document.getElementById('next').textContent=i<steps.length-1?"下一步 →":"回到开头";}
+steps.forEach((s,i)=>{const b=document.createElement('button');b.textContent=s.t;b.onclick=()=>go(i);document.getElementById('steps').append(b)});
+document.getElementById('next').onclick=()=>go(cur<steps.length-1?cur+1:0);
+go(0);
+</script></body></html>

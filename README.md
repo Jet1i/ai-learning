@@ -39,6 +39,11 @@
 | week7/paged.py | vLLM PagedAttention：预留 vs 分页的并发模拟 |
 | week7/quant.py | 量化：int8 / int4、分组量化与误差 |
 | week7/*.html | 本周交互 demo（屋顶线、Flash 拆解、vLLM 酒店、连续批处理、量化） |
+| week8/moe.py | MoE：路由器（wx）+ top-k 专家 + 负载统计 |
+| week8/balance.py | 负载均衡：强者越强 vs DeepSeek-V3 偏置；细粒度专家组合数 |
+| week8/mla.py | MLA：只存压缩向量 c、吸收技巧验证、各模型 KV cache 账本 |
+| week8/v3.py | DeepSeek-V3：逐矩阵算出 671B 总参数 / 37B 激活 + 部署与训练账 |
+| week8/*.html | 本周交互 demo（MoE 路由、MLA 压缩） |
 
 ## 运行
 ```bash

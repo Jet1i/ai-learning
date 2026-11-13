@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MoE:一个 token 怎么挑专家</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;margin:0;background:#f7f7f5;color:#222}
+.wrap{max-width:860px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:4px 0 4px}
+.sub{color:#666;font-size:14px;margin-bottom:14px}
+.card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:14px}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.steps button{border:1px solid #ccc;background:#fff;border-radius:16px;padding:6px 12px;cursor:pointer;font-size:13px}
+.steps button.on{background:#2b59c3;color:#fff;border-color:#2b59c3}
+.expl{font-size:15px;line-height:1.7;min-height:80px}
+.expl b{color:#2b59c3}
+svg text{font-family:inherit}
+.ctrl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px;margin-top:8px}
+.ctrl button{border:none;background:#2b59c3;color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer}
+.ctrl button.alt{background:#888}
+.num{font-family:Menlo,monospace;font-size:13px}
+table{border-collapse:collapse;font-size:14px;width:100%}
+td,th{border-bottom:1px solid #eee;padding:6px;text-align:right}
+td:first-child,th:first-child{text-align:left}
+</style></head><body><div class="wrap">
+<h1>MoE:一个 token 怎么挑专家</h1>
+<div class="sub">8 个专家,每个 token 挑 2 个(top-2)。一步一步点。</div>
+
+<div class="card">
+<div class="steps" id="steps"></div>
+<svg id="svg" viewBox="0 0 820 330" width="100%"></svg>
+<div class="expl" id="expl"></div>
+<div class="ctrl" id="ctrl"></div>
+</div>
+
+<div class="card">
+<b>算账:参数总量 vs 每个 token 用到的</b>
+<table>
+<tr><th>模型</th><th>专家数 / 每次选</th><th>总参数(要放显存)</th><th>每 token 激活(决定算多少)</th></tr>
+<tr><td>本页玩具</td><td>8 / 2</td><td>8 份</td><td>2 份 = 25%</td></tr>
+<tr><td>Mixtral 8x7B</td><td>8 / 2</td><td>46.7B</td><td>12.9B ≈ 28%</td></tr>
+<tr><td>DeepSeek-V3</td><td>256 / 8 + 1 共享</td><td>671B</td><td>37B ≈ 5.5%</td></tr>
+</table>
+<div class="sub" style="margin-top:8px">为什么 Mixtral 不是 8×7=56B?因为只有 FFN 被复制成 8 份,注意力层和词表是共享的。</div>
+</div>
+</div>
+<script>
+const NE=8, K=2;
+const scoresT=[0.3,-1.2,2.1,0.0,-0.5,1.4,-2.0,0.6]; // 一个 token 的路由分数
+const exps=scoresT.map(Math.exp), sum=exps.reduce((a,b)=>a+b,0);
+const probs=exps.map(e=>e/sum);
+const order=[...probs.keys()].sort((a,b)=>probs[b]-probs[a]);
+const topI=order.slice(0,K);
+const topSum=topI.reduce((a,i)=>a+probs[i],0);
+const f=(x,d=2)=>x.toFixed(d);
+const steps=[
+ {t:"① 普通 FFN",e:`普通 Transformer 每层的 FFN 是<b>一个大盒子</b>。每个 token 都要乘过盒子里的<b>全部参数</b>。<br>想让模型更聪明 → 盒子变大 → 每个 token 算得更多、更慢。`},
+ {t:"② 拆成 8 个专家",e:`把一个大 FFN 换成 <b>8 个小 FFN</b>(专家),每个和原来一样大。总参数变成 8 倍,知识容量大了。<br>但如果每个 token 都走 8 个,计算也 8 倍——没意义。所以要<b>挑</b>。`},
+ {t:"③ 路由器打分",e:`路由器就是一个 <b>wx</b>:x 是 token 向量(比如 4096 维),W 是 4096×8 的矩阵 → 得到 <b>8 个分数</b>,每个专家一个。<br>分数:<span class="num">[${scoresT.join(", ")}]</span>`},
+ {t:"④ softmax",e:`e^分数 再 <b>÷总和</b>(e^0 = 1 别忘了)→ 8 个概率,加起来 = 1。<br><span class="num">${probs.map(p=>f(p)).join("  ")}</span>`},
+ {t:"⑤ 挑 top-2",e:`只留最大的 2 个:专家 ${topI[0]}(${f(probs[topI[0]])})和专家 ${topI[1]}(${f(probs[topI[1]])})。<br>在这两个里<b>重新归一化</b>:${f(probs[topI[0]])}÷${f(topSum)} = <b>${f(probs[topI[0]]/topSum)}</b>,${f(probs[topI[1]])}÷${f(topSum)} = <b>${f(probs[topI[1]]/topSum)}</b>。其余 6 个专家<b>这次一个乘法都不做</b>。`},
+ {t:"⑥ 加权相加",e:`输出 = ${f(probs[topI[0]]/topSum)} × 专家${topI[0]}(x) + ${f(probs[topI[1]]/topSum)} × 专家${topI[1]}(x)。<br>结果和普通 FFN 输出形状一样(还是 4096 维),后面接残差,照常往下走。<br><b>参数 8 份,计算只做 2 份。</b>`},
+ {t:"⑦ 很多 token:负载",e:`下一个 token 会挑别的专家。点「放 token」看 200 个 token 流过。<br>再点「强者越强」:被选多的专家学得更好、更容易被选 → <b>其他专家饿死</b>,8 个专家实际只剩 1~2 个在干活。这就是 L2 要解决的<b>负载均衡</b>问题。`}
+];
+let cur=0, load=new Array(NE).fill(0), rich=false, timer=null;
+const svg=document.getElementById('svg');
+function el(tag,attrs,txt){const e=document.createElementNS("http://www.w3.org/2000/svg",tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(txt!==undefined)e.textContent=txt;svg.appendChild(e);return e}
+function draw(){
+ svg.innerHTML="";
+ // token
+ el("rect",{x:20,y:140,width:90,height:46,rx:8,fill:"#ffe9b3",stroke:"#d9a400"});
+ el("text",{x:65,y:168,"text-anchor":"middle","font-size":14},"token x");
+ if(cur===0){
+  el("line",{x1:110,y1:163,x2:300,y2:163,stroke:"#999","stroke-width":2});
+  el("rect",{x:300,y:60,width:260,height:206,rx:12,fill:"#2b59c3",opacity:.85});
+  el("text",{x:430,y:160,"text-anchor":"middle",fill:"#fff","font-size":18},"一个大 FFN");
+  el("text",{x:430,y:186,"text-anchor":"middle",fill:"#fff","font-size":13},"全部参数都参与计算");
+  el("line",{x1:560,y1:163,x2:700,y2:163,stroke:"#999","stroke-width":2});
+  el("text",{x:740,y:168,"text-anchor":"middle","font-size":14},"输出");
+  return;
+ }
+ const ex=560, bw=150, bh=30, gap=8, y0=20;
+ if(cur>=2){
+  el("rect",{x:170,y:130,width:110,height:66,rx:8,fill:"#e8eefc",stroke:"#2b59c3"});
+  el("text",{x:225,y:158,"text-anchor":"middle","font-size":14},"路由器");
+  el("text",{x:225,y:178,"text-anchor":"middle","font-size":12,fill:"#555"},"wx → 8 个分数");
+  el("line",{x1:110,y1:163,x2:170,y2:163,stroke:"#999","stroke-width":2});
+ }
+ for(let i=0;i<NE;i++){
+  const y=y0+i*(bh+gap);
+  const chosen=cur>=4&&cur<6&&topI.includes(i);
+  const dim=cur>=4&&cur<6&&!chosen;
+  let fill="#2b59c3", op=dim?0.15:0.85;
+  if(cur===5&&chosen)fill="#e07b00";
+  if(cur===6){op=0.85;fill="#2b59c3"}
+  const lineFrom=cur>=2?280:110;
+  if(cur<6) el("line",{x1:lineFrom,y1:163,x2:ex,y2:y+bh/2,stroke:chosen?"#e07b00":"#ccc","stroke-width":chosen?3:1});
+  el("rect",{x:ex,y:y,width:cur===6?60:bw,height:bh,rx:6,fill:fill,opacity:op});
+  el("text",{x:ex+8,y:y+20,fill:"#fff","font-size":13},"专家 "+i);
+  if(cur>=2&&cur<6){
+   const val=cur===2?scoresT[i].toFixed(1):probs[i].toFixed(2);
+   el("text",{x:ex-10,y:y+20,"text-anchor":"end","font-size":12,class:"num",fill:chosen?"#e07b00":"#333"},val);
+  }
+  if(cur>=4&&cur<6&&chosen){
+   el("text",{x:ex+bw+8,y:y+20,"font-size":13,fill:"#e07b00"},"× "+(probs[i]/topSum).toFixed(2));
+  }
+  if(cur===6){
+   const mx=Math.max(20,...load);
+   const w=load[i]/mx*170;
+   el("rect",{x:ex+66,y:y+4,width:w,height:bh-8,rx:4,fill:"#e07b00"});
+   el("text",{x:ex+70+w,y:y+20,"font-size":12},load[i]);
+  }
+ }
+ if(cur===5){
+  el("text",{x:420,y:318,"text-anchor":"middle","font-size":14,fill:"#e07b00"},"只有橙色两个专家做了计算 → 加权相加 → 输出");
+ }
+ if(cur===6){
+  el("text",{x:300,y:318,"text-anchor":"middle","font-size":13,fill:"#555"},`理想:每个专家接 ${(load.reduce((a,b)=>a+b,0)/NE).toFixed(0)} 次`);
+ }
+}
+let bias=new Array(NE).fill(0);
+function oneToken(){
+ const s=[...Array(NE)].map((_,i)=>gauss()+ (rich?bias[i]:0));
+ const o=[...s.keys()].sort((a,b)=>s[b]-s[a]).slice(0,K);
+ o.forEach(i=>{load[i]++; if(rich)bias[i]+=0.15;});
+}
+function gauss(){let u=Math.random(),v=Math.random();return Math.sqrt(-2*Math.log(u+1e-9))*Math.cos(2*Math.PI*v)}
+function run(){
+ if(timer)return; let n=0;
+ timer=setInterval(()=>{for(let j=0;j<4;j++)oneToken();n+=4;draw();if(n>=200){clearInterval(timer);timer=null}},40);
+}
+function renderCtrl(){
+ const c=document.getElementById('ctrl'); c.innerHTML="";
+ if(cur===6){
+  const b1=document.createElement('button');b1.textContent="放 200 个 token(随机路由)";b1.onclick=()=>{rich=false;load.fill(0);bias.fill(0);run()};
+  const b2=document.createElement('button');b2.textContent="强者越强";b2.className="alt";b2.onclick=()=>{rich=true;load.fill(0);bias.fill(0);run()};
+  c.append(b1,b2);
+ }
+ const nx=document.createElement('button');nx.textContent=cur<steps.length-1?"下一步 →":"回到开头";nx.onclick=()=>go(cur<steps.length-1?cur+1:0);c.append(nx);
+}
+function go(i){cur=i;
+ document.querySelectorAll('#steps button').forEach((b,j)=>b.classList.toggle('on',j===i));
+ document.getElementById('expl').innerHTML=steps[i].e; draw(); renderCtrl();}
+steps.forEach((s,i)=>{const b=document.createElement('button');b.textContent=s.t;b.onclick=()=>go(i);document.getElementById('steps').append(b)});
+go(0);
+</script></body></html>
