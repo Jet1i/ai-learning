@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PPO:限速 + 给每个字分功劳</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;max-width:780px;margin:0 auto;padding:16px;background:#fafaf7;color:#222;line-height:1.6}
+h1{font-size:22px}h2{font-size:18px;margin-top:26px;border-left:4px solid #c96;padding-left:8px}
+.card{background:#fff;border:1px solid #e5e2da;border-radius:10px;padding:14px;margin:10px 0}
+button{background:#c96;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:15px;cursor:pointer;margin:3px}
+button.sec{background:#888}button.on{outline:3px solid #333}.note{color:#666;font-size:14px}.big{font-size:20px;font-weight:600}
+.row{display:flex;align-items:center;gap:8px;margin:4px 0}.name{width:90px}.bar{flex:1;height:22px;background:#eee;border-radius:4px;position:relative;overflow:hidden}
+.fill{height:100%;background:#c96;transition:width .35s}.ref{position:absolute;top:0;bottom:0;border-left:2px dashed #333}.val{width:110px;text-align:right;font-variant-numeric:tabular-nums;font-size:14px}
+.cols{display:flex;gap:12px;flex-wrap:wrap}.cols>div{flex:1;min-width:300px}
+svg text{font-family:inherit}.explain{background:#f4f1ea;border-radius:8px;padding:10px 12px}
+.node{cursor:pointer}
+</style></head><body>
+<h1>PPO:rlhf.py 的"正式版"多了两样东西</h1>
+<p class="note">配套 <code>week9/ppo.py</code>。PPO = Proximal Policy Optimization,近端策略优化。Policy = LLM 本身;Proximal = <b>每次只挪一小步</b>。</p>
+
+<h2>① 为什么要限速:同一批数据反复用</h2>
+<div class="explain">LLM 生成回答最慢,所以 PPO 抽一批回答以后,<b>拿这同一批反复更新 10 轮</b>。下面这一批 16 个回答里,"长篇废话"碰巧出现了 5 次,而且每次都拿 9.1 分。看看反复推 10 轮会怎样。</div>
+<div class="card">
+<div id="batch" class="note"></div>
+<div class="cols">
+<div><b>不限速</b><div id="noclip"></div></div>
+<div><b>PPO(clip 0.8 ~ 1.2)</b><div id="clip"></div></div>
+</div>
+<div class="row"><span>已经用这批数据更新了</span><span class="big" id="ep">0</span><span>轮</span></div>
+<button onclick="epoch()">再更新 1 轮</button><button onclick="for(let i=0;i<10;i++)epoch()">更新 10 轮</button><button class="sec" onclick="resetB()">重来</button>
+<p class="note">虚线 = 这批数据抽出来时的概率(上一版)。右边每个回答涨到 1.2 倍、或者降到 0.8 倍以后,这批数据就不再推它;左边会一直推下去,一批运气好的数据就能把模型带歪(10 轮后废话 ×9)。右边废话停在约 ×1.5 而不是正好 ×1.2:它自己不再被推了,但别的回答被压低时,概率会被动地挤一点给它。</p>
+</div>
+
+<h2>② clip 的规则:一个回答算一遍</h2>
+<div class="card">
+<div class="row"><span>这个回答比平时</span><button id="aPos" class="on" onclick="setA(2)">好(A = +2)</button><button id="aNeg" onclick="setA(-2)">差(A = −2)</button></div>
+<div class="row"><span style="width:150px">新概率 / 旧概率 = ratio</span><input id="ratio" type="range" min="0.4" max="1.8" step="0.01" value="1" style="flex:1"><span class="big" id="rV"></span></div>
+<svg id="plot" viewBox="0 0 520 220" width="100%"></svg>
+<div id="rMsg" class="explain"></div>
+</div>
+
+<h2>③ 价值模型:一个总分,该算谁的功劳?</h2>
+<div class="card">
+<p class="note">回答只有 2 步:先选开场(直接 / 客套),再写内容(准确 / 胡编)。客套开场容易跑题,只有 40% 写对。每个圆圈里的数字是 <b>V = 从这里写下去,平均能拿多少分</b>。点一个最终结果:</p>
+<svg id="tree" viewBox="0 0 520 250" width="100%"></svg>
+<div id="tMsg" class="explain">点下面四个结果中的一个。建议先点 <b>客套 → 准确(6 分)</b>。</div>
+</div>
+
+<script>
+const A=["简洁准确","详细准确","敷衍一句","胡编政策","长篇废话"],REF=[.3,.25,.2,.15,.1],RM=[6,6.5,1,0,9.1];
+const sm=z=>{const m=Math.max(...z),e=z.map(x=>Math.exp(x-m)),s=e.reduce((a,b)=>a+b);return e.map(x=>x/s)};
+const BATCH=[0,0,0,0,1,1,1,2,2,2,3,4,4,4,4,4];
+const R=BATCH.map(i=>RM[i]),mean=R.reduce((a,b)=>a+b)/R.length,ADV=R.map(r=>r-mean);
+batch.innerHTML='这一批:'+A.map((a,i)=>`${a}×${BATCH.filter(x=>x==i).length}`).join('、')+`;平均分 ${mean.toFixed(2)},废话的优势 A = 9.1 − ${mean.toFixed(2)} = <b>+${(9.1-mean).toFixed(2)}</b>`;
+let Ln,Lc,e=0;const pOld=REF;
+function resetB(){Ln=REF.map(Math.log);Lc=REF.map(Math.log);e=0;drawB();}
+function step(L,clip){const p=sm(L),g=[0,0,0,0,0];BATCH.forEach((i,k)=>{const a=ADV[k],r=p[i]/pOld[i];if(clip&&((a>0&&r>1.2)||(a<0&&r<.8)))return;for(let j=0;j<5;j++)g[j]+=a*r*((j==i?1:0)-p[j]);});for(let j=0;j<5;j++)L[j]+=0.2*g[j]/BATCH.length;}
+function epoch(){step(Ln,false);step(Lc,true);e++;drawB();}
+function bars(L){const p=sm(L);return A.map((a,i)=>`<div class="row"><span class="name">${a}</span><div class="bar"><div class="fill" style="width:${p[i]*100}%"></div><div class="ref" style="left:${pOld[i]*100}%"></div></div><span class="val">${(p[i]*100).toFixed(1)}% ×${(p[i]/pOld[i]).toFixed(2)}</span></div>`).join('');}
+function drawB(){noclip.innerHTML=bars(Ln);clip.innerHTML=bars(Lc);ep.textContent=e;}
+resetB();
+
+let Av=2;
+function setA(a){Av=a;aPos.className=a>0?'on':'';aNeg.className=a<0?'on':'';drawP();}
+function drawP(){const r=+ratio.value;rV.textContent=r.toFixed(2);const X=v=>40+(v-.4)/1.4*460,Y=v=>110-v*28;
+const f=v=>Math.min(v*Av,Math.min(Math.max(v,.8),1.2)*Av);let path='',raw='';for(let v=.4;v<=1.801;v+=.01){path+=(path?'L':'M')+X(v)+','+Y(f(v));raw+=(raw?'L':'M')+X(v)+','+Y(v*Av);}
+plot.innerHTML=`<rect x="${X(.8)}" y="5" width="${X(1.2)-X(.8)}" height="205" fill="#f6efe3"/><line x1="40" y1="${Y(0)}" x2="500" y2="${Y(0)}" stroke="#ccc"/>
+<text x="${X(.8)-8}" y="215" font-size="12" fill="#888">0.8</text><text x="${X(1.2)-8}" y="215" font-size="12" fill="#888">1.2</text><text x="${X(1)-6}" y="215" font-size="12" fill="#888">1</text>
+<path d="${raw}" stroke="#bbb" stroke-dasharray="4 4" fill="none"/><path d="${path}" stroke="#c96" stroke-width="3" fill="none"/>
+<circle cx="${X(r)}" cy="${Y(f(r))}" r="7" fill="#333"/><text x="45" y="18" font-size="12" fill="#888">橙线 = PPO 的目标;虚线 = 不限速的目标(一直涨)</text>`;
+const stop=(Av>0&&r>1.2)||(Av<0&&r<.8);
+rMsg.innerHTML=`ratio ${r.toFixed(2)},A = ${Av>0?'+':''}${Av}:目标 = min(${r.toFixed(2)}×${Av}, clip后${Math.min(Math.max(r,.8),1.2).toFixed(2)}×${Av}) = <b>${f(r).toFixed(2)}</b><br>`+(stop?`<b style="color:#c33">橙线变平了 → 梯度 = 0,这批数据不再推它。</b>${Av>0?'已经比上一版涨了 20% 以上,够了。':'已经比上一版降了 20% 以上,够了。'}`:`橙线还是斜的 → 继续${Av>0?'推高':'压低'}。`);}
+ratio.oninput=drawP;drawP();
+
+const V0=3.7,VO={直接:5.6,客套:1.8},LEAF=[["直接","准确",7],["直接","胡编",0],["客套","准确",6],["客套","胡编",-1]];
+function drawT(sel){const pos={s:[260,35],直接:[140,120],客套:[380,120]},lx=[70,210,310,450];
+let h=`<line x1="260" y1="35" x2="140" y2="120" stroke="${sel>=0&&sel<2?'#c96':'#ccc'}" stroke-width="3"/><line x1="260" y1="35" x2="380" y2="120" stroke="${sel>=2?'#c96':'#ccc'}" stroke-width="3"/>`;
+LEAF.forEach((l,i)=>{const p=pos[l[0]];h+=`<line x1="${p[0]}" y1="${p[1]}" x2="${lx[i]}" y2="205" stroke="${sel==i?'#c96':'#ccc'}" stroke-width="3"/>`;});
+h+=`<circle cx="260" cy="35" r="24" fill="#fff8f0" stroke="#c96" stroke-width="2"/><text x="260" y="40" text-anchor="middle" font-size="15">${V0}</text><text x="300" y="30" font-size="12" fill="#888">开始</text>`;
+for(const o of["直接","客套"]){const p=pos[o];h+=`<circle cx="${p[0]}" cy="${p[1]}" r="24" fill="#fff8f0" stroke="#c96" stroke-width="2"/><text x="${p[0]}" y="${p[1]+5}" text-anchor="middle" font-size="15">${VO[o]}</text><text x="${p[0]}" y="${p[1]-30}" text-anchor="middle" font-size="13">${o}开场</text>`;}
+LEAF.forEach((l,i)=>{h+=`<g class="node" onclick="pick(${i})"><rect x="${lx[i]-42}" y="205" width="84" height="38" rx="7" fill="${sel==i?'#c96':'#fff'}" stroke="#c96" stroke-width="2"/><text x="${lx[i]}" y="221" text-anchor="middle" font-size="12" fill="${sel==i?'#fff':'#333'}">${l[1]}</text><text x="${lx[i]}" y="237" text-anchor="middle" font-size="13" font-weight="600" fill="${sel==i?'#fff':'#333'}">${l[2]} 分</text></g>`;});
+h+=`<text x="140" y="172" text-anchor="middle" font-size="11" fill="#888">80% / 20%</text><text x="380" y="172" text-anchor="middle" font-size="11" fill="#888">40% / 60%</text>`;
+tree.innerHTML=h;}
+function pick(i){drawT(i);const[o,c,r]=LEAF[i],a1=VO[o]-V0,a2=r-VO[o],f=x=>(x>=0?'+':'')+x.toFixed(1);
+tMsg.innerHTML=`这次写的是 <b>${o} → ${c}</b>,裁判最后给 <b>${r} 分</b>。<br><br><b>只看总分(rlhf.py 的做法)</b>:两步都拿 ${r} − ${V0} = <b>${f(r-V0)}</b>,"${o}"和"${c}"一起${r-V0>=0?'被表扬':'被批评'}。<br><br><b>PPO 用价值模型(看每一步让 V 变了多少)</b>:<br>第 1 步「${o}」:V 从 ${V0} 变成 ${VO[o]} → 功劳 <b style="color:${a1>=0?'#2a8a2a':'#c33'}">${f(a1)}</b><br>第 2 步「${c}」:V 从 ${VO[o]} 变成 最终 ${r} → 功劳 <b style="color:${a2>=0?'#2a8a2a':'#c33'}">${f(a2)}</b><br><br>`+(i==2?'客套明明是个坏开场(让平均分从 3.7 掉到 1.8),只看总分它却被表扬了;价值模型能把功劳分清:批评客套,表扬准确。':'两种做法加起来总功劳一样('+f(r-V0)+'),区别在于价值模型把它<b>分到了真正该负责的那一步</b>。')+`<br><span class="note">真实的价值模型是另一个和 LLM 差不多大的神经网络,专门训练来预测 V。所以 PPO 显存里有 4 个模型:LLM、SFT 参照、裁判、价值模型。</span>`;}
+drawT(-1);
+</script>
+<h2>④ 放回真实 LLM:每一步 = 一个 token</h2>
+<div class="card">
+<p class="note">上面的"开场 / 内容"两步只是简化。真实 LLM 里,<b>一步就是一个 token</b>:价值模型在每个 token 后面都猜一次 V,功劳、clip 也都按 token 算。回答"您好 | 亲 | 点申请 | 退款",裁判减绳子后最终 5.45 分。点"下一个 token"。</p>
+<div id="tokRow" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
+<table style="width:100%;font-size:14px;border-collapse:collapse" id="tokTab"></table>
+<div id="tokMsg" class="explain" style="margin-top:8px">从"还没开始"出发:价值模型猜 V = 3.7。</div>
+<button onclick="tokStep()">下一个 token →</button><button class="sec" onclick="tokReset()">重来</button>
+</div>
+<script>
+const TK=["您好","亲","点申请","退款"],TV=[3.7,3.5,1.8,4.9,5.45];let tk=0;
+function tokDraw(){tokRow.innerHTML=TK.map((t,i)=>`<span style="padding:6px 12px;border-radius:6px;border:2px solid ${i<tk?'#c96':'#ddd'};background:${i==tk-1?'#fff8f0':'#fff'};opacity:${i<tk?1:.4}">${t}</span>`).join('');
+let h='<tr><th style="text-align:left">token</th><th>写之前 V</th><th>写之后 V</th><th>功劳</th><th>改权重时</th></tr>';
+for(let i=0;i<tk;i++){const c=TV[i+1]-TV[i];h+=`<tr><td>${TK[i]}</td><td>${TV[i]}</td><td>${TV[i+1]}${i==3?'(裁判真实分)':''}</td><td style="color:${c>=0?'#2a8a2a':'#c33'};font-weight:600">${c>=0?'+':''}${c.toFixed(2)}</td><td>${Math.abs(c)<0.3?'几乎不动':c>0?'推高这个 token 的概率':'压低这个 token 的概率'}</td></tr>`;}
+tokTab.innerHTML=h;}
+function tokStep(){if(tk>=4)return;tk++;tokDraw();const c=TV[tk]-TV[tk-1];
+tokMsg.innerHTML=tk<4?`写了「${TK[tk-1]}」,价值模型猜 V 从 ${TV[tk-1]} 变成 ${TV[tk]} → 这个 token 的功劳 = ${TV[tk]} − ${TV[tk-1]} = <b>${c>=0?'+':''}${c.toFixed(2)}</b>`:`最后一个 token 用裁判的真实分 5.45:功劳 = 5.45 − 4.9 = <b>+0.55</b>。<br>4 个功劳加起来 = −0.2 − 1.7 + 3.1 + 0.55 = <b>1.75</b> = 5.45 − 3.7,总功劳没变,只是分到了每个 token。<br>改权重:Σ 功劳 × (让这个 token 概率变大的梯度),做一次反向传播,所有权重一起挪一小步。然后 clip 按 token 检查:哪个 token 的概率比上一版变了 20%,就关掉它的开关。`;}
+function tokReset(){tk=0;tokDraw();tokMsg.innerHTML='从"还没开始"出发:价值模型猜 V = 3.7。';}
+tokDraw();
+</script>
+</body></html>

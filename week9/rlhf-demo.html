@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RLHF:奖励推着模型走,KL 绳子拉住它</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#fafaf7;color:#222;line-height:1.6}
+h1{font-size:22px}.card{background:#fff;border:1px solid #e5e2da;border-radius:10px;padding:14px;margin:10px 0}
+.row{display:flex;align-items:center;gap:8px;margin:5px 0}.name{width:110px}.bar{flex:1;height:24px;background:#eee;border-radius:5px;position:relative;overflow:hidden}
+.fill{height:100%;background:#c96;transition:width .15s}.ref{position:absolute;top:0;bottom:0;border-left:2px dashed #333}
+.val{width:60px;text-align:right;font-variant-numeric:tabular-nums}.rm{width:60px;color:#888;font-size:13px}
+button{background:#c96;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:15px;cursor:pointer;margin:3px}
+button.sec{background:#888}.big{font-size:20px;font-weight:600}.note{color:#666;font-size:14px}
+#log{font-size:14px;min-height:44px;background:#f4f1ea;border-radius:6px;padding:6px 10px}
+.hl{background:#fde8e0}
+</style></head><body>
+<h1>RLHF:奖励推着模型走,KL 绳子拉住它</h1>
+<p class="note">配套 <code>week9/rlhf.py</code>。问题是"怎么退款?",模型只会从 5 个回答里抽一个。奖励模型(L1 那个偏爱长度的)给每个回答打固定分。虚线 = SFT 模型原来的概率。</p>
+<div class="card">
+<div class="row"><span class="name"><b>回答</b></span><span class="rm">奖励分</span><span style="flex:1"><b>模型说它的概率</b></span></div>
+<div id="bars"></div>
+<div class="row" style="margin-top:10px"><span>奖励模型平均分</span><span class="big" id="rmAvg"></span>&nbsp;&nbsp;<span>人真正的满意度</span><span class="big" id="trueAvg"></span>&nbsp;&nbsp;<span>步数</span><span class="big" id="stepV">0</span></div>
+<div id="log">点"走 1 步"看一次更新:抽一个回答 → 打分 → 和平时比 → 推高或压低。</div>
+</div>
+<div class="card">
+<div class="row"><span>KL 绳子 β</span><input id="beta" type="range" min="0" max="10" step="0.5" value="0" style="flex:1"><span class="big val" id="betaV">0</span></div>
+<button onclick="go(1)">走 1 步</button><button onclick="run()">自动跑</button><button class="sec" onclick="stop()">暂停</button><button class="sec" onclick="reset()">回到 SFT</button>
+<p class="note">先用 β=0 自动跑:模型很快只会说"长篇客套废话",奖励分越来越高,人的满意度却越来越低,这就是<b>奖励作弊</b>。<br>再把 β 调到 3 重来:每次回答额外扣 β×log(p/p_SFT) 分,离 SFT 越远扣得越多,模型被拉住了,满意度反而最高。β=10 时绳子太紧,几乎学不到东西。</p>
+</div>
+<script>
+const A=["简洁准确","详细准确","敷衍一句","胡编政策","长篇客套废话"],RM=[6,6.5,1,0,9.1],TG=[9,9,3,0,2],REF=[.3,.25,.2,.15,.1];
+let L,base,step,timer=null;
+const sm=z=>{const m=Math.max(...z),e=z.map(x=>Math.exp(x-m)),s=e.reduce((a,b)=>a+b);return e.map(x=>x/s)};
+function reset(){stop();L=REF.map(Math.log);base=4.54;step=0;draw(-1);log.textContent='回到 SFT 模型。';}
+function draw(hi){const p=sm(L);bars.innerHTML=A.map((a,i)=>`<div class="row ${i==hi?'hl':''}"><span class="name">${a}</span><span class="rm">${RM[i]}</span><div class="bar"><div class="fill" style="width:${p[i]*100}%"></div><div class="ref" style="left:${REF[i]*100}%"></div></div><span class="val">${(p[i]*100).toFixed(1)}%</span></div>`).join('');
+rmAvg.textContent=p.reduce((s,x,i)=>s+x*RM[i],0).toFixed(2);trueAvg.textContent=p.reduce((s,x,i)=>s+x*TG[i],0).toFixed(2);stepV.textContent=step;}
+function go(n){const b=+beta.value;let msg='';for(let k=0;k<n;k++){const p=sm(L);let u=Math.random(),i=0;while(i<4&&u>p[i]){u-=p[i];i++;}
+const kl=b*Math.log(p[i]/REF[i]),r=RM[i]-kl,adv=r-base,old=base;base+=.05*(r-base);for(let j=0;j<5;j++)L[j]+=.05*adv*((j==i?1:0)-p[j]);step++;
+if(n==1)msg=`抽到「${A[i]}」:奖励 ${RM[i]}${b?` − 绳子 ${kl.toFixed(2)}`:''} = ${r.toFixed(2)},平时平均 ${old.toFixed(2)} → ${adv>0?'比平时好,<b>推高</b>它':'比平时差,<b>压低</b>它'}`;
+if(n==1)draw(i);}if(n>1)draw(-1);if(msg)log.innerHTML=msg;}
+function run(){if(timer)return;timer=setInterval(()=>go(20),60);}
+function stop(){clearInterval(timer);timer=null;}
+beta.oninput=()=>betaV.textContent=beta.value;reset();
+</script></body></html>

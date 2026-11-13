@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>奖励模型:人类偏好怎么变成分数</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#fafaf7;color:#222;line-height:1.6}
+h1{font-size:22px}h2{font-size:18px;margin-top:28px;border-left:4px solid #c96;padding-left:8px}
+.card{background:#fff;border:1px solid #e5e2da;border-radius:10px;padding:14px;margin:10px 0}
+.row{display:flex;align-items:center;gap:10px;margin:6px 0}.row label{width:120px}
+input[type=range]{flex:1}.bar{height:22px;background:#eee;border-radius:5px;overflow:hidden;flex:1;position:relative}
+.fill{height:100%;background:#c96;transition:width .3s}.fill.b{background:#69c}.fill.neg{background:#c66}
+.val{width:70px;text-align:right;font-variant-numeric:tabular-nums}
+button{background:#c96;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:15px;cursor:pointer;margin-right:6px}
+button.sec{background:#888}.big{font-size:20px;font-weight:600}.note{color:#666;font-size:14px}
+.win{background:#fde8e0;border-color:#e99}
+table{border-collapse:collapse;width:100%}td{padding:4px 6px}
+</style></head><body>
+<h1>奖励模型:把"人更喜欢 A"变成一个分数</h1>
+<p class="note">配套 <code>week9/reward.py</code>。真实奖励模型 = 一个 LLM 读完回答 + 最后一个 <b>wx+b</b> 吐出一个数。这里把 LLM 省掉,每个回答用 4 个特征代替。</p>
+
+<h2>① 两个分数 → 人选 A 的概率</h2>
+<div class="card">
+<div class="row"><label>A 的分数 r_A</label><input id="ra" type="range" min="-5" max="105" step="0.5" value="2"><span class="val" id="raV"></span></div>
+<div class="row"><label>B 的分数 r_B</label><input id="rb" type="range" min="-5" max="105" step="0.5" value="0.5"><span class="val" id="rbV"></span></div>
+<div class="row"><label>差 r_A − r_B</label><span class="big" id="dV"></span></div>
+<div class="row"><label>P(人选 A)</label><div class="bar"><div class="fill" id="pBar"></div></div><span class="val big" id="pV"></span></div>
+<button onclick="shift()">A、B 都 +50</button><span class="note">← 试试:概率一点不变,只有"差"有意义</span>
+<p class="note">公式就是 sigmoid(差)。差 0 → 50%;差 1.5 → 82%;差 5 → 99%。</p>
+</div>
+
+<h2>② 训练:从一堆"选 A / 选 B"里猜出人心里的 w</h2>
+<div class="card">
+<p class="note">标注员心里有一套真实权重(灰色),奖励模型从 0 开始(彩色)。每一步看 2000 对比较,往"让被选中的那个分数更高"的方向挪一点。</p>
+<table id="wt"></table>
+<div class="row"><label>步数</label><span id="stepV" class="big">0</span>&nbsp;&nbsp;<label>loss</label><span id="lossV" class="big">0.693</span>&nbsp;&nbsp;<label>猜对</label><span id="accV" class="big">—</span></div>
+<button onclick="train(1)">走 1 步</button><button onclick="train(20)">走 20 步</button><button class="sec" onclick="resetW()">重来</button>
+<p class="note">loss = −log sigmoid(r_被选 − r_没选)。注意没有 b:两个分数一相减,b 就消掉了。</p>
+</div>
+
+<h2>③ 奖励作弊的种子:如果标注员偏爱长回答</h2>
+<div class="card">
+<div class="row"><label>标注员对"长度"的偏爱</label><input id="lenW" type="range" min="0" max="1.5" step="0.05" value="0.3"><span class="val" id="lenV"></span></div>
+<table>
+<tr><td></td><td>有用</td><td>礼貌</td><td>长度</td><td>胡编</td><td><b>奖励分</b></td></tr>
+<tr id="g"><td>短而有用</td><td>2.5</td><td>0.5</td><td>1</td><td>0</td><td class="big" id="gV"></td></tr>
+<tr id="j"><td>长篇客套废话</td><td>0.3</td><td>1.5</td><td>10</td><td>1</td><td class="big" id="jV"></td></tr>
+</table>
+<p id="hackMsg" class="note"></p>
+<p class="note">奖励模型只会学到标注员的偏好,包括偏见。下一课 RLHF 会让 LLM 拼命追高分,它就会去钻这种空子,这就叫 <b>reward hacking</b>(奖励作弊)。</p>
+</div>
+
+<script>
+const sig=z=>1/(1+Math.exp(-z));
+function upd1(){const a=+ra.value,b=+rb.value;raV.textContent=a;rbV.textContent=b;dV.textContent=(a-b).toFixed(1);const p=sig(a-b);pBar.style.width=(p*100)+'%';pV.textContent=(p*100).toFixed(1)+'%';}
+function shift(){ra.value=Math.min(105,+ra.value+50);rb.value=Math.min(105,+rb.value+50);upd1();}
+ra.oninput=rb.oninput=upd1;upd1();
+
+const F=["有用","礼貌","长度(百字)","胡编"],TW=[2,1,0.3,-3];
+let seed=1;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647;};
+const feat=()=>[rnd()*3,rnd()*2,rnd()*5,rnd()<.5?0:1];
+const dot=(a,b)=>a.reduce((s,x,i)=>s+x*b[i],0);
+const pairs=[];for(let i=0;i<2000;i++){const a=feat(),b=feat();const aw=rnd()<sig(dot(a,TW)-dot(b,TW));pairs.push(aw?[a,b]:[b,a]);}
+let w=[0,0,0,0],step=0;
+function drawW(){let h='';F.forEach((f,i)=>{const s=40;h+=`<tr><td style="width:90px">${f}</td><td style="width:60%"><div class="bar"><div class="fill ${w[i]<0?'neg':''}" style="width:${Math.abs(w[i])/3.5*100}%"></div></div><div class="bar" style="height:8px;margin-top:2px"><div class="fill b" style="width:${Math.abs(TW[i])/3.5*100}%;background:#bbb"></div></div></td><td class="val">${w[i]>=0?'+':''}${w[i].toFixed(2)}</td><td class="val note">真 ${TW[i]>0?'+':''}${TW[i]}</td></tr>`});wt.innerHTML=h;}
+function train(n){for(let k=0;k<n;k++){let g=[0,0,0,0],L=0,acc=0;for(const[c,r]of pairs){const d=dot(c,w)-dot(r,w),p=sig(d);L-=Math.log(p);if(p>.5)acc++;for(let i=0;i<4;i++)g[i]-=(1-p)*(c[i]-r[i]);}for(let i=0;i<4;i++)w[i]-=0.5*g[i]/pairs.length;step++;lossV.textContent=(L/pairs.length).toFixed(3);accV.textContent=(acc/pairs.length*100).toFixed(1)+'%';}stepV.textContent=step;drawW();}
+function resetW(){w=[0,0,0,0];step=0;stepV.textContent=0;lossV.textContent='0.693';accV.textContent='—';drawW();}
+drawW();
+
+function upd3(){const lw=+lenW.value;lenV.textContent=lw.toFixed(2);const W=[2,1,lw,-3];const G=[2.5,.5,1,0],J=[.3,1.5,10,1];const gs=dot(G,W),js=dot(J,W);gV.textContent=gs.toFixed(2);jV.textContent=js.toFixed(2);
+document.getElementById('g').className=gs>=js?'win':'';document.getElementById('j').className=js>gs?'win':'';
+hackMsg.innerHTML=js>gs?'<b style="color:#c33">长篇废话赢了!</b> 奖励模型学到"越长越好",高分 ≠ 好回答。':'短而有用的回答赢。把滑块往右拖,看看偏爱多大时废话会反超。';}
+lenW.oninput=upd3;upd3();
+</script></body></html>

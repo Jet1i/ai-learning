@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DPO:不要裁判,直接用"A 比 B 好"训练模型</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;max-width:780px;margin:0 auto;padding:16px;background:#fafaf7;color:#222;line-height:1.6}
+h1{font-size:22px}.card{background:#fff;border:1px solid #e5e2da;border-radius:10px;padding:14px;margin:10px 0}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.steps button{background:#ddd;color:#333}.steps button.on{background:#c96;color:#fff}
+button{background:#c96;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:15px;cursor:pointer;margin:3px}
+button.sec{background:#888}.note{color:#666;font-size:14px}.big{font-size:20px;font-weight:600}
+.route{display:flex;align-items:center;gap:4px;margin:10px 0;flex-wrap:wrap}.box{border:2px solid #c96;border-radius:8px;padding:6px 10px;background:#fff8f0;font-size:14px}
+.box.gray{border-color:#bbb;background:#f3f3f3;color:#999;text-decoration:line-through}
+.arrow{position:relative;width:40px;height:4px;background:#ddd;border-radius:2px;overflow:hidden}
+.arrow::after{content:"";position:absolute;left:-12px;top:0;width:12px;height:4px;background:#c96;animation:mv 1.2s linear infinite}
+@keyframes mv{to{left:40px}}
+table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:4px 5px;text-align:left}th{color:#666;font-weight:500;border-bottom:1px solid #eee}
+.bar{height:20px;background:#eee;border-radius:4px;position:relative;overflow:hidden;min-width:120px}
+.fill{height:100%;background:#c96;transition:width .5s}.ref{position:absolute;top:0;bottom:0;border-left:2px dashed #333}
+tr.c{background:#e6f4e6}tr.r{background:#fbe3e0}.num{font-variant-numeric:tabular-nums}
+#explain{background:#f4f1ea;border-radius:8px;padding:10px 12px;min-height:70px}
+.pair{font-size:17px;margin:6px 0}.up{color:#2a8a2a;font-weight:600}.down{color:#c33;font-weight:600}
+</style></head><body>
+<h1>DPO:不要裁判,直接用"A 比 B 好"训练模型</h1>
+<div class="steps" id="steps"></div>
+<div class="card" id="routes" style="display:none">
+<b>RLHF 的路(绕)</b>
+<div class="route"><span class="box">人的偏好 A≻B</span><span class="arrow"></span><span class="box">训练裁判</span><span class="arrow"></span><span class="box">LLM 生成几千次</span><span class="arrow"></span><span class="box">裁判打分 + 绳子</span><span class="arrow"></span><span class="box">好模型</span></div>
+<b>DPO 的路(直达)</b>
+<div class="route"><span class="box">人的偏好 A≻B</span><span class="arrow" style="width:90px"></span><span class="box gray">裁判</span><span class="arrow" style="width:90px"></span><span class="box gray">生成+打分</span><span class="arrow" style="width:90px"></span><span class="box">好模型</span></div>
+</div>
+<div class="card" id="model">
+<table><thead><tr><th>回答</th><th style="width:34%">模型说它的概率(虚线 = SFT 模型,训练前)</th><th>概率</th><th>涨了几倍</th><th>隐式分数<br>β×ln(倍数)</th></tr></thead><tbody id="tb"></tbody></table>
+<div id="pairBox"></div>
+</div>
+<div id="explain"></div>
+<div style="margin-top:8px"><button id="prev" class="sec" onclick="go(cur-1)">← 上一步</button><button id="next" onclick="go(cur+1)">下一步 →</button><span id="extra"></span></div>
+
+<script>
+const A=["简洁准确","详细准确","敷衍一句","胡编政策","长篇客套废话"],REF=[.3,.25,.2,.15,.1],TG=[9,9,3,0,2],BETA=1;
+const refL=REF.map(Math.log);let L=[...refL],hi={c:-1,r:-1},cur=0,timer=null,nPairs=0;
+const sm=z=>{const m=Math.max(...z),e=z.map(x=>Math.exp(x-m)),s=e.reduce((a,b)=>a+b);return e.map(x=>x/s)};
+const sig=z=>1/(1+Math.exp(-z));
+const score=(p,i)=>BETA*Math.log(p[i]/REF[i]);
+function draw(){const p=sm(L);tb.innerHTML=A.map((a,i)=>`<tr class="${i==hi.c?'c':i==hi.r?'r':''}"><td>${a}</td><td><div class="bar"><div class="fill" style="width:${p[i]*100}%"></div><div class="ref" style="left:${REF[i]*100}%"></div></div></td><td class="num">${(p[i]*100).toFixed(1)}%</td><td class="num">×${(p[i]/REF[i]).toFixed(2)}</td><td class="num">${score(p,i)>=0?'+':''}${score(p,i).toFixed(2)}</td></tr>`).join('');}
+function pairInfo(c,r){const p=sm(L),d=score(p,c)-score(p,r);return `<div class="pair">人的选择:<b style="color:#2a8a2a">${A[c]}</b> ≻ <b style="color:#c33">${A[r]}</b></div>隐式分数差 = ${score(p,c).toFixed(2)} − (${score(p,r).toFixed(2)}) = <b>${d.toFixed(2)}</b>  →  sigmoid = <b class="big">${(sig(d)*100).toFixed(1)}%</b>(模型多有把握"人会选绿色那个")`;}
+function dpoStep(c,r,lr){const p=sm(L),d=score(p,c)-score(p,r),g=(1-sig(d))*BETA;L[c]+=lr*g;L[r]-=lr*g;}
+function samplePair(){let a=Math.floor(Math.random()*5),b;do{b=Math.floor(Math.random()*5)}while(b==a);return Math.random()<sig((TG[a]-TG[b])/2)?[a,b]:[b,a];}
+function satisfaction(){const p=sm(L);return p.reduce((s,x,i)=>s+x*TG[i],0);}
+const S=[
+{t:"① 两条路",f(){routes.style.display='block';model.style.display='none';explain.innerHTML="RLHF 先用偏好训练一个裁判,再让 LLM 生成、裁判打分、强化学习一点点推。<br><b>DPO 把中间灰色的两步删掉</b>:直接拿\"A 比 B 好\"的数据训练 LLM。下面一步步看它怎么做到。";}},
+{t:"② 起点:SFT 模型",f(){routes.style.display='none';model.style.display='block';L=[...refL];hi={c:-1,r:-1};pairBox.innerHTML='';draw();explain.innerHTML="这是做完 SFT、还没训练的模型。同一个问题问 100 次:30 次简洁、25 次详细……10 次废话。<br>DPO 先<b>复制一份冻住</b>当参照(虚线)。现在模型和参照一模一样,所以每个回答都是 <b>×1.00</b>,隐式分数全是 <b>0</b>。";}},
+{t:"③ 隐式分数是什么",f(){L=[...refL];L[1]+=0.5;L[4]-=0.5;hi={c:-1,r:-1};pairBox.innerHTML='';draw();const p=sm(L);explain.innerHTML=`假设模型稍微变了一点(我手动改的):详细准确涨到 ×${(p[1]/REF[1]).toFixed(2)},废话降到 ×${(p[4]/REF[4]).toFixed(2)}。<br><b>隐式分数 = β × ln(涨了几倍)</b>:涨了就是正分,降了就是负分。<br>这就是上一条消息那张表:<b>模型心里的\"裁判分\",就藏在它比训练前涨了多少里</b>。所以不用另外训练裁判。`;}},
+{t:"④ 一对偏好",f(){L=[...refL];hi={c:1,r:4};draw();pairBox.innerHTML=pairInfo(1,4);explain.innerHTML="拿来一条人标的数据:<b>详细准确 ≻ 长篇废话</b>。<br>现在两个隐式分数都是 0,差 0,sigmoid(0) = <b>50%</b>:模型完全不知道人更喜欢哪个。<br>DPO 的 loss 跟 L1 训练裁判的一模一样:<b>−log sigmoid(分数差)</b>。不同的是,这里的分数不是裁判给的,而是 LLM 自己的隐式分数。";}},
+{t:"⑤ 推一下",f(){L=[...refL];hi={c:1,r:4};draw();pairBox.innerHTML=pairInfo(1,4);explain.innerHTML="点下面的<b>\"推一下\"</b>:绿色那个的概率<span class=up>被推高</span>,红色那个<span class=down>被压低</span>,分数差变大,sigmoid 往 100% 走。<br>多点几下:越接近 100%,每次推得越少。因为 (1 − sigmoid) 越来越小,已经学会的就不再使劲推。";extra.innerHTML='<button id="pushB" onclick="dpoStep(1,4,0.6);draw();pairBox.innerHTML=pairInfo(1,4)">推一下</button>';}},
+{t:"⑥ 很多对偏好",f(){L=[...refL];hi={c:-1,r:-1};nPairs=0;draw();pairBox.innerHTML=`<div class="pair">已学 <b id="np">0</b> 对偏好  ·  人真正的满意度 <b id="sat" class="big">${satisfaction().toFixed(2)}</b>(SFT 时 5.75)</div><div id="lastp" class="note"></div>`;explain.innerHTML="点<b>\"自动学\"</b>:随机抽两个回答,按人的真实喜好决定谁赢(详细 ≈ 简洁 > 敷衍 > 废话 > 胡编),每对推一下。<br>全程<b>没有裁判、没有生成、没有强化学习</b>,只有一对对偏好数据。好回答的概率被推高,差的被压低。";extra.innerHTML='<button id="autoB" onclick="auto()">自动学</button><button class="sec" onclick="stopA()">暂停</button>';}},
+{t:"⑦ 绳子在哪 + 省多少",f(){stopA();hi={c:-1,r:-1};draw();pairBox.innerHTML='';explain.innerHTML="<b>绳子在哪?</b>藏在\"涨了几倍\"里:分数是和 SFT 模型比出来的,参照永远是那条虚线。β 越大,同样的分数差需要涨的倍数越少,模型离 SFT 越近。<br><b>省多少?</b>PPO 显存里要放 4 个模型(LLM、SFT 参照、裁判、价值模型),7B 光 fp16 权重就是 4 × 14 = <b>56 GB</b>;DPO 只要 2 个(LLM + SFT 参照)= <b>28 GB</b>,训练起来和 SFT 一样简单。<br><b>代价:</b>DPO 只能从固定的偏好数据里学,模型不会自己去试新回答。数据里有偏见(比如人偏爱长),它照样学进去。";}}
+];
+function auto(){if(timer)return;timer=setInterval(()=>{for(let k=0;k<5;k++){const[c,r]=samplePair();dpoStep(c,r,0.15);nPairs++;hi={c,r};}draw();np.textContent=nPairs;sat.textContent=satisfaction().toFixed(2);lastp.textContent=`刚学的一对:${A[hi.c]} ≻ ${A[hi.r]}`;if(nPairs>=1500)stopA();},80);}
+function stopA(){clearInterval(timer);timer=null;}
+function go(i){if(i<0||i>=S.length)return;stopA();cur=i;extra.innerHTML='';S[i].f();steps.innerHTML=S.map((s,j)=>`<button class="${j==i?'on':''}" onclick="go(${j})">${s.t}</button>`).join('');prev.disabled=i==0;next.disabled=i==S.length-1;}
+go(0);
+</script></body></html>

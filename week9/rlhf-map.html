@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RLHF 全流程地图:从预训练到 PPO</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;max-width:820px;margin:0 auto;padding:16px;background:#fafaf7;color:#222;line-height:1.6}
+h1{font-size:22px}h2{font-size:18px;margin-top:26px;border-left:4px solid #c96;padding-left:8px}
+.note{color:#666;font-size:14px}.card{background:#fff;border:1px solid #e5e2da;border-radius:10px;padding:14px;margin:10px 0}
+.stages{display:flex;gap:4px;align-items:stretch;flex-wrap:wrap}
+.st{flex:1;min-width:120px;border:2px solid #ddd;border-radius:10px;padding:8px 10px;background:#fff;cursor:pointer;transition:.25s}
+.st.on{border-color:#c96;background:#fff8f0;transform:translateY(-3px);box-shadow:0 4px 10px rgba(0,0,0,.08)}
+.st b{display:block;font-size:15px}.st small{color:#777}
+.arr{align-self:center;color:#c96;font-size:22px}
+.models{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.m{border:2px solid #ccc;border-radius:8px;padding:5px 10px;font-size:14px;background:#fff;transition:.25s;opacity:.45}
+.m.use{opacity:1;border-color:#c96;background:#fff8f0}.m.train{opacity:1;border-color:#2a8a2a;background:#e6f4e6}
+.alt{display:flex;gap:10px;flex-wrap:wrap}.alt>div{flex:1;min-width:230px}
+button{background:#c96;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:15px;cursor:pointer;margin:3px}
+button.sec{background:#888}
+#exp,#pexp{background:#f4f1ea;border-radius:8px;padding:10px 12px;min-height:80px}
+.loop{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sta{border:2px solid #ddd;border-radius:10px;padding:10px;background:#fff;transition:.3s;min-height:110px}
+.sta.on{border-color:#c96;background:#fff8f0;box-shadow:0 0 0 4px #f6e2cc}
+.sta h3{margin:0 0 4px;font-size:15px}.tag{display:inline-block;font-size:12px;padding:1px 7px;border-radius:10px;background:#eee;margin-left:4px}
+.num{font-variant-numeric:tabular-nums;font-weight:600}
+.legend span{display:inline-block;margin-right:12px;font-size:13px}
+</style></head><body>
+<h1>RLHF 全流程地图</h1>
+<p class="note"><b>RLHF</b> 是整套做法的名字(用人类反馈做强化学习)。<b>PPO</b> 是第 ④ 步里实际用来改 LLM 的那个算法。所以准确地说:PPO 是 RLHF 里的一个零件,不是 RLHF 的一种。</p>
+
+<h2>一、四个阶段(点每个方块)</h2>
+<div class="stages" id="stages"></div>
+<div class="legend note" style="margin-top:8px"><span>模型状态:</span><span style="color:#2a8a2a">■ 绿 = 这一步在训练它</span><span style="color:#c96">■ 橙 = 用到它但冻住</span><span style="color:#aaa">■ 灰 = 这一步用不到 / 还没有</span></div>
+<div class="models" id="models"></div>
+<div id="exp"></div>
+
+<h2>二、放大第 ④ 步:PPO 的一轮</h2>
+<p class="note">一个例子从头走到尾:问题"怎么退款?",LLM 写了"客套开场 → 内容准确"。点"下一站"。</p>
+<div class="loop">
+<div class="sta" id="s0"><h3>① 生成 <span class="tag">LLM</span></h3><div id="d0" class="note">LLM 抽一批回答</div></div>
+<div class="sta" id="s1"><h3>② 算分 <span class="tag">裁判 + 🪢 绳子</span></h3><div id="d1" class="note">裁判打分,绳子扣分</div></div>
+<div class="sta" id="s3"><h3>④ 更新参数 <span class="tag">✂️ clip</span></h3><div id="d3" class="note">推高 / 压低,但限速</div></div>
+<div class="sta" id="s2"><h3>③ 分功劳 <span class="tag">价值模型</span></h3><div id="d2" class="note">把总分分到每一步</div></div>
+</div>
+<p class="note" style="text-align:center">按顺时针转一圈:① → ② → ③ → ④ → 回到 ①(LLM 变好一点点,再抽下一批)……重复几千轮</p>
+<div class="models" id="pmodels"></div>
+<div id="pexp">点"下一站"开始。</div>
+<button class="sec" onclick="pgo(pi-1)">← 上一站</button><button onclick="pgo(pi+1)">下一站 →</button><button class="sec" onclick="pgo(-1)">重来</button>
+
+<h2>三、其他路线:替换掉哪一段</h2>
+<div class="alt">
+<div class="card"><b>DPO(L3)</b><br>把 ③ 训练裁判 + ④ PPO <b>整个换掉</b>,直接拿"A 比 B 好"训练 LLM。<br><span class="note">显存:LLM + SFT 参照 = 2 个模型</span></div>
+<div class="card"><b>GRPO(L4,DeepSeek 用的)</b><br>还是 RLHF 的流程,但第 ④ 步把 PPO 换成 GRPO:<b>去掉价值模型</b>,同一个问题生成一组回答,彼此比较。<br><span class="note">显存:3 个模型(数学 / 代码题用规则打分时,连裁判都不要)</span></div>
+</div>
+
+<script>
+const M=["预训练模型","LLM(训练中)","SFT 参照(冻住)","裁判","价值模型"];
+const ST=[
+{t:"① 预训练",s:"万亿 token 猜下一个字",m:[2,0,0,0,0],e:"拿网页、书、代码训练,一直做\"猜下一个字\"(第 3 周 minigpt)。<br><b>得到:</b>知识很多、但只会续写的模型。问它\"怎么退款?\",它可能接着写\"怎么改密码?\"。"},
+{t:"② SFT",s:"几万条示范问答,照着模仿",m:[2,0,0,0,0],e:"在预训练模型上继续训练,数据是人写的示范问答,loss 只算回答部分。<br><b>得到:SFT 模型</b>,会一问一答了,但好回答和差回答都会说(30% 简洁 / 25% 详细 / 20% 敷衍 / 15% 胡编 / 10% 废话)。",out:"sft"},
+{t:"③ 训练裁判",s:"人标\"A 比 B 好\"",m:[0,0,0,2,0],e:"人对同一个问题的两个回答做二选一,训练一个裁判:分数 = wx+b,loss = −log sigmoid(r_被选 − r_没选)(L1)。<br><b>得到:裁判</b>,给它一个回答,它直接吐出一个分数。<b>训练完冻住。</b>"},
+{t:"④ RL(用 PPO)",s:"用裁判的分数改 LLM",m:[0,2,1,1,2],e:"把 SFT 模型<b>复制两份</b>:一份继续训练(LLM,主角),一份冻住(SFT 参照,绳子的桩子)。<br>再加上冻住的裁判,和一个一起训练的价值模型,一共 <b>4 个模型</b>。具体每一轮怎么转,看下面第二部分。<br><b>得到:</b>最终给用户用的聊天模型。裁判和价值模型训练完就不要了。"}
+];
+let si=3;
+function drawS(){stages.innerHTML=ST.map((s,i)=>(i?'<span class="arr">→</span>':'')+`<div class="st ${i==si?'on':''}" onclick="si=${i};drawS()"><b>${s.t}</b><small>${s.s}</small></div>`).join('');
+const m=ST[si].m;models.innerHTML=M.map((x,i)=>`<span class="m ${m[i]==2?'train':m[i]==1?'use':''}">${x}</span>`).join('');exp.innerHTML=ST[si].e;}
+drawS();
+
+const PM=["LLM(训练中)","SFT 参照(冻住)","裁判(冻住)","价值模型(训练中)"];
+const P=[
+{use:[1,0,0,0],d:"LLM 写出:<b>客套开场 → 内容准确</b><br>这种回答现在的概率 p = <span class=num>0.12</span>(SFT 时是 0.10)",e:"<b>① 生成。</b>LLM 对一批问题各写一个回答(真实系统一批几百个)。生成是整个训练里最慢的一步,所以这批数据后面会反复用好几轮。"},
+{use:[0,1,1,0],d:"裁判打分 <span class=num>6.0</span><br>🪢 绳子扣 3 × ln(0.12 / 0.10) = <span class=num>0.55</span><br>最终得分 = 6.0 − 0.55 = <span class=num>5.45</span>",e:"<b>② 算分。</b>冻住的裁判给整个回答打一个分;<b>绳子</b>拿现在的概率和冻住的 SFT 参照比,涨得越多扣得越多。<br>绳子管的是\"总共离 SFT 跑了多远\",目的是防止钻裁判的空子。"},
+{use:[0,0,0,1],d:"V(开始) = 3.7,V(客套之后) = 1.8<br>「客套」功劳 1.8 − 3.7 = <span class=num style='color:#c33'>−1.9</span><br>「准确」功劳 5.45 − 1.8 = <span class=num style='color:#2a8a2a'>+3.65</span>",e:"<b>③ 分功劳。</b>价值模型估计\"写到这里,平均还能拿多少分\"。每一步让这个期望涨了多少,就是这一步的功劳。<br>只看总分的话,两步都会被表扬;有了价值模型,客套被批评,准确被表扬。价值模型自己也在这一步顺便训练,让它估得更准。"},
+{use:[1,0,0,0],d:"「准确」:概率 0.40 → 推高,最多到 0.40 × 1.2 = <span class=num>0.48</span><br>「客套」:概率 0.30 → 压低,最多到 0.30 × 0.8 = <span class=num>0.24</span><br>同一批数据再用一轮、两轮……到顶了就不推",e:"<b>④ 更新参数。</b>功劳为正的推高概率,为负的压低,这一步改的是 LLM 的权重。<br><b>✂️ clip</b> 拿这一版和<b>上一版自己</b>比:最多变 ±20%。因为同一批数据要反复用,没有它,一批运气好的数据就能把模型推翻车。<br>然后回到 ①,用变好一点点的 LLM 抽下一批。"}
+];
+let pi=-1;
+function pgo(i){if(i<-1||i>3)return;pi=i;for(let k=0;k<4;k++){document.getElementById('s'+k).className='sta'+(k==i?' on':'');}
+for(let k=0;k<4;k++){document.getElementById('d'+k).innerHTML=k<=i&&i>=0?P[k].d:['LLM 抽一批回答','裁判打分,绳子扣分','把总分分到每一步','推高 / 压低,但限速'][k];}
+const u=i>=0?P[i].use:[0,0,0,0];pmodels.innerHTML=PM.map((x,k)=>`<span class="m ${u[k]?(k==0||k==3?'train':'use'):''}">${x}</span>`).join('');
+pexp.innerHTML=i>=0?P[i].e+(i==3?'<br><br><b>一句话总结:</b>绳子管终点(跟 SFT 比),价值模型管功劳(分到每一步),clip 管速度(跟上一版比)。':''):'点"下一站"开始。';}
+pgo(-1);
+</script></body></html>
