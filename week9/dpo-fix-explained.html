@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>两轮 DPO 差在哪</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* 布局:一列长读,每节一张图;顶部固定目录可跳节 */
+  --bg:#f5f6f8; --panel:#ffffff; --ink:#1b2330; --muted:#5b6676; --line:#dde2ea; --soft:#eef1f5;
+  --chosen:#0f766e; --rejected:#be123c; --third:#7c3aed;
+  --m-sft:#8a95a5; --m-pure:#d97706; --m-fix:#2563eb;
+  --display:"Noto Serif SC","Songti SC",serif; --body:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12161c; --panel:#1a2029; --ink:#e6eaf0; --muted:#9aa5b5; --line:#2c3440; --soft:#222a35;
+  --chosen:#2dd4bf; --rejected:#fb7185; --third:#a78bfa; --m-sft:#7d8899; --m-pure:#f59e0b; --m-fix:#60a5fa; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#12161c; --panel:#1a2029; --ink:#e6eaf0; --muted:#9aa5b5; --line:#2c3440; --soft:#222a35;
+  --chosen:#2dd4bf; --rejected:#fb7185; --third:#a78bfa; --m-sft:#7d8899; --m-pure:#f59e0b; --m-fix:#60a5fa; color-scheme:dark;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.7}
+nav{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+nav .in{max-width:900px;margin:0 auto;padding:8px 16px;display:flex;gap:6px;flex-wrap:wrap}
+nav a{font-size:13px;color:var(--muted);text-decoration:none;padding:3px 9px;border:1px solid var(--line);border-radius:999px;background:var(--panel)}
+nav a:hover,nav a:focus-visible{color:var(--ink);border-color:var(--ink);outline:none}
+main{max-width:900px;margin:0 auto;padding:20px 16px 60px;display:flex;flex-direction:column;gap:22px}
+h1{font-family:var(--display);font-size:30px;line-height:1.3;margin:6px 0 4px;text-wrap:balance}
+h2{font-family:var(--display);font-size:21px;line-height:1.35;margin:0 0 8px;text-wrap:balance}
+h2 .n{font-family:var(--mono);font-size:14px;color:var(--muted);margin-right:8px;font-weight:600}
+p{margin:0 0 10px;max-width:68ch}
+.lead{color:var(--muted)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 20px 16px;scroll-margin-top:56px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.sum{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--soft)}
+.card h3{margin:0 0 6px;font-size:15px}
+.card .big{font-family:var(--mono);font-size:22px;font-weight:600}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid currentColor;margin-left:6px;vertical-align:2px}
+.bad{color:var(--rejected)} .good{color:var(--chosen)}
+.cands{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0}
+.cand{border-left:4px solid;padding:8px 10px;background:var(--soft);border-radius:6px;font-size:14px}
+.cand b{display:block;font-size:13px;margin-bottom:2px}
+.cand code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+.c-ch{border-color:var(--chosen)} .c-ch b{color:var(--chosen)}
+.c-rj{border-color:var(--rejected)} .c-rj b{color:var(--rejected)}
+.c-th{border-color:var(--third)} .c-th b{color:var(--third)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:6px 0 10px}
+.seg button{font:inherit;font-size:14px;padding:5px 12px;border:0;background:var(--panel);color:var(--muted);cursor:pointer;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}
+.seg button:focus-visible{outline:2px solid var(--m-fix);outline-offset:-2px}
+.bars{display:flex;flex-direction:column;gap:5px}
+.bar{display:grid;grid-template-columns:110px 1fr 150px;align-items:center;gap:8px;font-size:14px}
+.bar .lab{font-family:var(--mono);font-size:13px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar .track{height:18px;background:var(--soft);border-radius:4px;overflow:hidden}
+.bar .fill{height:100%;background:var(--m-sft);border-radius:4px;transition:width .35s}
+.bar .val{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+.bar.sorry .lab,.bar.sorry .val{color:var(--chosen);font-weight:600}
+.bar.sorry .fill{background:var(--chosen)}
+.gen{margin-top:10px;font-size:14px;padding:8px 10px;border-radius:6px;background:var(--soft)}
+.gen code{font-family:var(--mono);font-size:13px}
+.note{font-size:14px;color:var(--muted)}
+.formula{font-family:var(--mono);font-size:14px;background:var(--soft);border-radius:6px;padding:8px 10px;margin:8px 0;overflow-x:auto;white-space:nowrap}
+.sl{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;margin:8px 0}
+.sl input{width:100%}
+.meters{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px}
+.meter .t{font-size:13px;color:var(--muted)}
+.meter .v{font-family:var(--mono);font-size:20px;font-weight:600}
+.meter .track{height:10px;background:var(--soft);border-radius:5px;overflow:hidden;margin-top:4px}
+.meter .fill{height:100%;background:var(--ink);transition:width .2s}
+.scroll{overflow-x:auto}
+svg text{font-family:var(--body)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:4px 0 6px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;background:var(--c);vertical-align:-1px}
+.toks{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0}
+.tok{font-family:var(--mono);font-size:12.5px;border:1px solid var(--line);border-radius:6px;padding:3px 6px 2px;text-align:center;min-width:52px;transition:background .3s}
+.tok .p{display:block;font-size:11.5px;color:var(--ink);opacity:.85}
+.tok.first{outline:2px solid var(--chosen);outline-offset:1px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:13px}
+td.num,th.num{text-align:right}
+tr.now td{background:var(--soft);font-weight:500}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.two .card ul{margin:4px 0 0;padding-left:18px;font-size:14px}
+@media (max-width:640px){.sum,.cands,.meters,.two{grid-template-columns:1fr}.bar{grid-template-columns:76px 1fr 128px}h1{font-size:25px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<nav aria-label="目录"><div class="in">
+  <a href="#s1">① 三种回答</a><a href="#s2">② 第一个词</a><a href="#s3">③ DPO 只看差距</a>
+  <a href="#s4">④ 概率挪去哪</a><a href="#s5">⑤ 逐 token</a><a href="#s6">⑥ 修法 1</a><a href="#s7">⑦ 修法 2</a><a href="#s8">⑧ 总结</a>
+</div></nav>
+<main>
+<header>
+  <h1>两轮 DPO 差在哪</h1>
+  <p class="lead">同一个 SFT 客服模型、同一个问题「What is the capital of France?」,真 GPT-2 实测。第一轮 loss 更低却没学会拒答,第二轮 loss 高一点却学会了。下面每张图的数字都是用这三个模型(SFT、纯 DPO、修复版)算出来的。</p>
+  <div class="sum">
+    <div class="card"><h3>第一轮:纯 DPO <span class="pill bad">没学会</span></h3>
+      <div class="big">loss 0.002</div><div>无关问题拒答 <b class="num">0/6</b> · 网店题 <b class="num">4 → 3</b></div></div>
+    <div class="card"><h3>第二轮:DPO + SFT 项 + 「别拒」数据 <span class="pill good">学会了</span></h3>
+      <div class="big">loss 0.010</div><div>无关问题拒答 <b class="num">5/6</b> · 网店题 <b class="num">4 → 4</b></div></div>
+  </div>
+</header>
+
+<section id="s1">
+  <h2><span class="n">①</span>同一个问题,三种可能的回答</h2>
+  <p>模型面对「法国首都」,可能说出的回答有很多种。我们只盯三种:</p>
+  <div class="cands">
+    <div class="cand c-ch"><b>拒答(chosen,我们想要的)</b><code>Sorry, I can only help with ShopX orders, shipping and accounts.</code></div>
+    <div class="cand c-rj"><b>运费答案(rejected,SFT 自己说的)</b><code>Standard shipping takes 2-4 days. You can track it in My Orders.</code></div>
+    <div class="cand c-th"><b>胡编(第三种,数据里根本没有)</b><code>The capital of France is in the form of money, bonds, and money market funds. …</code></div>
+  </div>
+  <p>生成是<b>一个 token 一个 token</b>往下走的,每一步贪心地挑概率最大的那个词。所以<b>第一个词</b>基本就决定了它答哪一类:第一个词是 Sorry 就是拒答,是 Standard 就是运费,是 The 就开始胡编。</p>
+</section>
+
+<section id="s2">
+  <h2><span class="n">②</span>第一个词:三个模型各选了谁</h2>
+  <div class="seg" role="group" aria-label="选择模型" data-for="first">
+    <button id="f-sft" aria-pressed="true" data-m="sft">SFT(训练前)</button>
+    <button id="f-pure" aria-pressed="false" data-m="pure">第一轮 纯 DPO</button>
+    <button id="f-fix" aria-pressed="false" data-m="fix">第二轮 修复版</button>
+  </div>
+  <div class="bars" id="firstBars"></div>
+  <div class="gen" id="firstGen"></div>
+  <p class="note" id="firstNote" style="margin-top:8px"></p>
+</section>
+
+<section id="s3">
+  <h2><span class="n">③</span>DPO 的原理:它只看「差距」</h2>
+  <p>DPO 对每一对数据只算一个数:差距 = r<sub>chosen</sub> − r<sub>rejected</sub>,其中 r = β × (logπ − logπ<sub>ref</sub>)。loss 和「推力」都只由这个差距决定:</p>
+  <div class="formula">loss = −ln σ(差距)      推力 = σ(−差距)      梯度 = β × 推力 × [ 推高 chosen − 压低 rejected ]</div>
+  <p>拖动差距,看 loss 和推力怎么变:</p>
+  <div class="sl"><label for="gap">差距</label><input id="gap" type="range" min="-2" max="10" step="0.01" value="0"><span class="num" id="gapv">0.00</span></div>
+  <div class="meters">
+    <div class="meter"><div class="t">loss = −ln σ(差距)</div><div class="v" id="lossv">0.693</div><div class="track"><div class="fill" id="lossf"></div></div></div>
+    <div class="meter"><div class="t">推力 = σ(−差距)(训练开始时是 0.5)</div><div class="v" id="pushv">0.500</div><div class="track"><div class="fill" id="pushf"></div></div></div>
+  </div>
+  <div class="seg" role="group" aria-label="跳到实测差距">
+    <button id="g0" aria-pressed="false" data-g="0">训练前 0</button>
+    <button id="g1" aria-pressed="false" data-g="6.32">第一轮训练后 6.32</button>
+    <button id="g2" aria-pressed="false" data-g="9.84">第二轮训练后 9.84</button>
+  </div>
+  <p id="gapNote"></p>
+  <p class="note">关键:公式里没有任何一项要求「chosen 要排第一」。只要 chosen 比 rejected 高出足够多,推力就趋近 0,DPO 就停手了。</p>
+</section>
+
+<section id="s4">
+  <h2><span class="n">④</span>第一轮:概率被挪到了哪里</h2>
+  <p>三种回答的整句 log 概率(越靠右越可能被说出来,0 = 100%)。圆点是三个模型:</p>
+  <div class="legend"><span style="--c:var(--m-sft)">S = SFT(训练前)</span><span style="--c:var(--m-pure)">纯 = 第一轮 纯 DPO</span><span style="--c:var(--m-fix)">修 = 第二轮 修复版</span></div>
+  <div class="scroll"><svg id="dots" viewBox="0 0 760 250" width="100%" role="img" aria-label="三种回答在三个模型下的整句 log 概率"></svg></div>
+  <table style="margin-top:8px">
+    <thead><tr><th>回答</th><th class="num">SFT</th><th class="num">纯 DPO</th><th class="num">修复版</th><th>第一轮发生了什么</th></tr></thead>
+    <tbody>
+      <tr><td class="good">拒答</td><td class="num">−95.15</td><td class="num">−44.29</td><td class="num">−1.82</td><td>涨了 50.9,可还是太低</td></tr>
+      <tr><td class="bad">运费答案</td><td class="num">−5.02</td><td class="num">−17.34</td><td class="num">−10.07</td><td>被压低 12.3,让出概率</td></tr>
+      <tr><td style="color:var(--third)">胡编</td><td class="num">−39.69</td><td class="num">−33.00</td><td class="num">−43.96</td><td><b>没人教它,也涨了 6.7</b></td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:10px">第一轮时运费答案的整句概率(−17.3)其实还是三者里最高的,但它的第一个词 Standard 只剩 <span class="num">2.4%</span>。贪心是一步一步选的,第一步就选了 The(<span class="num">23.8%</span>),后面顺着 The 一路编下去。rejected 让出来的概率,没去 chosen,而是流到了第三种回答。</p>
+</section>
+
+<section id="s5">
+  <h2><span class="n">⑤</span>逐 token 看拒答那句:第一个词卡住了</h2>
+  <div class="seg" role="group" aria-label="选择模型" data-for="tok">
+    <button id="t-sft" aria-pressed="false" data-m="sft">SFT(训练前)</button>
+    <button id="t-pure" aria-pressed="true" data-m="pure">第一轮 纯 DPO</button>
+    <button id="t-fix" aria-pressed="false" data-m="fix">第二轮 修复版</button>
+  </div>
+  <div class="toks" id="toks"></div>
+  <p id="tokNote"></p>
+  <p class="note">每格下面的数 = 模型在那个位置给这个 token 的概率,颜色越深越高。整句 log 概率 = 16 个格子的 ln 加起来。</p>
+</section>
+
+<section id="s6">
+  <h2><span class="n">⑥</span>修法 1:再加一项 SFT loss,专门把 chosen 推到第一</h2>
+  <div class="formula">loss = −ln σ(差距)  +  α × ( −平均每个 token 的 ln p(chosen) )      α = 1.0(Llama 3 做 DPO 时用 0.2)</div>
+  <table>
+    <thead><tr><th></th><th>DPO 那一项</th><th>新加的 SFT 项</th></tr></thead>
+    <tbody>
+      <tr><td>它要什么</td><td>chosen 比 rejected 高出足够多</td><td>chosen 的每个 token 都接近 100%</td></tr>
+      <tr><td>每个 token 的推力</td><td>β × σ(−差距),差距大了就 ≈ 0</td><td>∝ (1 − p),p 没到 1 就一直推</td></tr>
+      <tr><td>「法国首都」的 Sorry</td><td>第一轮停在 <span class="num">3.1 × 10⁻⁷</span>,推力只剩 <span class="num">0.0018</span></td><td>p 很小时推力 ≈ 1,一直推到 <span class="num">0.967</span></td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:10px">这一项就是第 3 周、L0 用过的交叉熵,只是只对 chosen 算。它补上了 DPO 缺的那句话:「chosen 不光要比 rejected 好,还得高到能被说出来。」</p>
+</section>
+
+<section id="s7">
+  <h2><span class="n">⑦</span>修法 2:加了 SFT 项又冒出「误拒」,再补一类数据</h2>
+  <p>只加 SFT 项时,拒答这句话被推得太猛,有些网店问题也开始答 Sorry。于是给每道网店题再加一对:<b>正确答案 ≻ 拒答</b>(该答的别拒)。四次真跑的结果:</p>
+  <table>
+    <thead><tr><th>配置</th><th class="num">无关问题拒答</th><th class="num">网店题答对</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>纯 DPO(第一轮)</td><td class="num">0/6</td><td class="num">4 → 3</td><td>loss 0.002,行为没变</td></tr>
+      <tr><td>+ SFT 项,α = 0.2</td><td class="num">6/6</td><td class="num">4 → 3</td><td>3 道网店题被拒(误拒)</td></tr>
+      <tr><td>+ SFT 项 α = 0.2 + 「别拒」对</td><td class="num">0/6</td><td class="num">4 → 4</td><td>别拒压过了拒答</td></tr>
+      <tr class="now"><td>+ SFT 项 α = 1.0 + 「别拒」对(第二轮)</td><td class="num">5/6</td><td class="num">4 → 4</td><td>现在的默认</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:10px">修复版对网店题「When does my parcel get here?」的第一个词:Standard <span class="num">99.99%</span>,Sorry <span class="num">0.01%</span>,没有误拒。还错的 2 道网店题(取消订单、改地址都答成退款)在 SFT 阶段就错了,DPO 这次没碰它们。</p>
+</section>
+
+<section id="s8">
+  <h2><span class="n">⑧</span>总结:两轮到底改了什么</h2>
+  <div class="two">
+    <div class="card"><h3>第一轮 纯 DPO</h3><ul>
+      <li>数据:无关 → 拒答好于乱答(12 对);网店 → 正确好于答错类别(12 对)</li>
+      <li>loss:只有 −ln σ(差距)</li>
+      <li>结果:差距拉开了(6.32),但主要靠压低 rejected;Sorry 反而更低,概率流向胡编</li>
+    </ul></div>
+    <div class="card"><h3>第二轮 修复版</h3><ul>
+      <li>数据:再加网店 → 正确好于拒答(12 对,该答的别拒)</li>
+      <li>loss:−ln σ(差距) + 1.0 × chosen 的 SFT loss</li>
+      <li>结果:Sorry 0.967,排第一;拒答 5/6,网店题不掉</li>
+    </ul></div>
+  </div>
+  <p style="margin-top:12px"><b>售前一句话:</b>DPO 擅长在模型已经会的几种说法之间调偏好;要它学一句从没说过的话,得先 SFT,或在 DPO 里加 SFT 项。上线前要在没见过的问题上同时测「拒答率」和「误拒率」,loss 再低也不算数。</p>
+</section>
+</main>
+
+<script>
+const FIRST = {
+  sft:  {top:[[" Standard",.5786],[" You",.1607],[" Tap",.1049],[" Go",.0531],[" The",.0227],[" €",.0049]], sorry:2.05e-6, rank:1953,
+         gen:"Standard shipping takes 2-4 days. You can track it in My Orders.",
+         note:"SFT 只学过网店答案,第一个词 Standard 占 57.9%。Sorry 排第 1953 名,概率 0.000002。"},
+  pure: {top:[[" The",.2375],[" Rate",.0809],[" D",.0556],[" You",.0497],[" Go",.0378],[" La",.0341]], sorry:3.10e-7, rank:4204,
+         gen:"The capital of France is in the form of money, bonds, and money market funds. You can buy and sell shares in France in the My Orders page.",
+         note:"Standard 被压到 2.4%,让出来的概率分散给了 The、Rate、D 这些词。Sorry 反而从第 1953 名掉到第 4204 名。贪心第一步选 The,开始胡编。"},
+  fix:  {top:[[" Sorry",.9667],[" Standard",.0052],[" Tap",.0022],[" Square",.0021],[" Nope",.0015],[" You",.0010]], sorry:.9667, rank:1,
+         gen:"Sorry, I can only help with ShopX orders, shipping and accounts.",
+         note:"Sorry 占 96.7%,排第一,整句拒答被贪心生成出来。"}
+};
+const TOKS = [" Sorry",","," I"," can"," only"," help"," with"," Shop","X"," orders",","," shipping"," and"," accounts",".","<|end|>"];
+const TP = {
+  sft:  [2.05e-6,.735,.012,.798,.075,.23,.055,0,.012,0,.004,.002,.003,0,.985,.009],
+  pure: [3.10e-7,.628,.107,.704,.654,.134,.407,0,.543,.783,.214,.161,.46,.007,.806,.013],
+  fix:  [.967,.967,.931,.985,.996,.978,.924,.981,.967,.982,.879,.996,.993,.997,.947,.275]
+};
+const TSUM = {sft:-95.15, pure:-44.29, fix:-1.82};
+const TNOTE = {
+  sft:"训练前:整句 −95.15。第一个词 Sorry 只有 0.000002,后面也大多很低。",
+  pure:"第一轮:整句从 −95.15 涨到 −44.29。涨的是中间那些容易涨的词(only 0.075 → 0.654,orders ≈0 → 0.783)。DPO 只看整句加起来的总数,差距一够就停手,不管是哪个词涨的。最关键的第一个词 Sorry 反而从 0.000002 掉到 0.0000003,这句话永远开不了头。",
+  fix:"第二轮:16 个词几乎都在 0.9 以上,第一个词 Sorry 0.967,整句 −1.82。SFT 项对每个没到 100% 的词都一直推。"
+};
+const fmtP = p => p===0 ? "<0.001" : p < 0.001 ? p.toExponential(1).replace("e-","×10⁻").replace(/⁻(\d+)/,(m,d)=>"⁻"+[...d].map(c=>"⁰¹²³⁴⁵⁶⁷⁸⁹"[c]).join("")) : (p*100>=10? (p*100).toFixed(1): (p*100).toFixed(2))+"%";
+function renderFirst(m){
+  const d = FIRST[m], box = document.getElementById("firstBars"); box.innerHTML = "";
+  const rows = d.top.map(([t,p]) => ({t,p,sorry:t===" Sorry"}));
+  if(!rows.some(r=>r.sorry)) rows.push({t:" Sorry", p:d.sorry, sorry:true, rank:d.rank});
+  const col = m==="sft"?"var(--m-sft)":m==="pure"?"var(--m-pure)":"var(--m-fix)";
+  rows.forEach(r=>{
+    const el = document.createElement("div"); el.className = "bar"+(r.sorry?" sorry":"");
+    const w = Math.max(r.p*100, r.p>0?0.4:0);
+    el.innerHTML = `<div class="lab">${r.t.replace(/ /g,"␣")}</div><div class="track"><div class="fill" style="width:${w}%;${r.sorry?"":"background:"+col}"></div></div><div class="val">${fmtP(r.p)}${r.rank?` · 第${r.rank}名`:""}</div>`;
+    box.appendChild(el);
+  });
+  document.getElementById("firstGen").innerHTML = `贪心生成的回答:<code>${d.gen}</code>`;
+  document.getElementById("firstNote").textContent = d.note;
+}
+function renderToks(m){
+  const box = document.getElementById("toks"); box.innerHTML = "";
+  const base = getComputedStyle(document.documentElement).getPropertyValue("--chosen").trim();
+  TOKS.forEach((t,i)=>{
+    const p = TP[m][i], el = document.createElement("div"); el.className = "tok"+(i===0?" first":"");
+    const a = Math.round(Math.min(1, Math.max(p,0))*55);
+    el.style.background = `color-mix(in srgb, ${base} ${a}%, transparent)`;
+    el.innerHTML = `${t.replace(/ /g,"␣").replace("<","&lt;").replace(">","&gt;")}<span class="p">${p===0?"<.001":p<0.001?fmtP(p):p.toFixed(3)}</span>`;
+    box.appendChild(el);
+  });
+  document.getElementById("tokNote").innerHTML = `<b>整句 log 概率 ${TSUM[m].toFixed(2)}</b>。` + TNOTE[m];
+}
+function seg(group, fn){
+  group.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{
+    group.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed", x===b?"true":"false")); fn(b.dataset.m);
+  }));
+}
+seg(document.querySelector('[data-for="first"]'), renderFirst);
+seg(document.querySelector('[data-for="tok"]'), renderToks);
+renderFirst("sft"); renderToks("pure");
+
+const sig = x => 1/(1+Math.exp(-x));
+const gap = document.getElementById("gap");
+function renderGap(){
+  const g = +gap.value, L = -Math.log(sig(g)), P = sig(-g);
+  document.getElementById("gapv").textContent = g.toFixed(2);
+  document.getElementById("lossv").textContent = L.toFixed(L<0.01?4:3);
+  document.getElementById("pushv").textContent = P.toFixed(P<0.01?4:3);
+  document.getElementById("lossf").style.width = Math.min(100, L/2.2*100)+"%";
+  document.getElementById("pushf").style.width = (P*100)+"%";
+  let n = "";
+  if (Math.abs(g-6.32)<0.02) n = "第一轮训练后「法国首都」这一对:差距 6.32,loss 0.0018,推力 0.0018,只剩开始时 0.5 的 0.4%。DPO 基本停手了,可这时拒答整句还在 −44,第一个词 Sorry 还是 0.0000003。";
+  else if (Math.abs(g-9.84)<0.02) n = "第二轮训练后:差距 9.84,DPO 那一项的推力只剩 0.00005,也停手了。把 Sorry 推到 0.967 的,主要是新加的 SFT 项(见 ⑥)。";
+  else if (Math.abs(g)<0.02) n = "训练前 π = π_ref,隐含奖励全是 0:差距 0,loss = ln 2 = 0.693,推力 0.5。";
+  else n = g>0 ? "差距越大,loss 越接近 0,推力也越接近 0。" : "差距是负的(rejected 反而更高),loss 大,推力也大。";
+  document.getElementById("gapNote").textContent = n;
+}
+gap.addEventListener("input", ()=>{document.querySelectorAll("#g0,#g1,#g2").forEach(b=>b.setAttribute("aria-pressed","false")); renderGap();});
+document.querySelectorAll("#g0,#g1,#g2").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("#g0,#g1,#g2").forEach(x=>x.setAttribute("aria-pressed", x===b?"true":"false"));
+  gap.value = b.dataset.g; renderGap();
+}));
+renderGap();
+
+function renderDots(){
+  const svg = document.getElementById("dots"), cs = getComputedStyle(document.documentElement), c = k => cs.getPropertyValue(k).trim();
+  const X0=150, X1=730, x = v => X0 + (v+100)/100*(X1-X0);
+  const rows = [["拒答 (chosen)", c("--chosen"), {S:-95.15, 纯:-44.29, 修:-1.82}],
+                ["运费 (rejected)", c("--rejected"), {S:-5.02, 纯:-17.34, 修:-10.07}],
+                ["胡编 (第三种)", c("--third"), {S:-39.69, 纯:-33.00, 修:-43.96}]];
+  const mc = {S:c("--m-sft"), 纯:c("--m-pure"), 修:c("--m-fix")};
+  let s = "";
+  for (let v=-100; v<=0; v+=20){ s += `<line x1="${x(v)}" x2="${x(v)}" y1="20" y2="210" stroke="${c("--line")}"/><text x="${x(v)}" y="230" font-size="12" text-anchor="middle" fill="${c("--muted")}">${v}</text>`; }
+  s += `<text x="${X1}" y="246" font-size="12" text-anchor="end" fill="${c("--muted")}">整句 log 概率 →(0 = 100%)</text>`;
+  rows.forEach(([name,col,vals],i)=>{
+    const y = 55 + i*62;
+    s += `<text x="${X0-14}" y="${y+5}" font-size="14" text-anchor="end" fill="${col}" font-weight="600">${name}</text>`;
+    s += `<line x1="${X0}" x2="${X1}" y1="${y}" y2="${y}" stroke="${c("--line")}" stroke-dasharray="3 3"/>`;
+    const sv = vals.S, pv = vals["纯"];
+    s += `<line x1="${x(sv)}" x2="${x(pv)}" y1="${y}" y2="${y}" stroke="${mc["纯"]}" stroke-width="3" opacity=".55"/>`;
+    Object.entries(vals).forEach(([k,v])=>{
+      s += `<circle cx="${x(v)}" cy="${y}" r="11" fill="${mc[k]}"/><text x="${x(v)}" y="${y+4.5}" font-size="${k==="S"?11:10}" text-anchor="middle" fill="#fff" font-weight="700">${k}</text>`;
+    });
+  });
+  svg.innerHTML = s;
+}
+renderDots();
+const mq = window.matchMedia("(prefers-color-scheme: dark)");
+mq.addEventListener && mq.addEventListener("change", ()=>{renderDots(); renderToks(document.querySelector('[data-for="tok"] [aria-pressed="true"]').dataset.m);});
+</script>
+</body>
+</html>

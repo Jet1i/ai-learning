@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>从预训练模型到 PPO:RLHF 完整流程</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;max-width:900px;margin:0 auto;padding:16px;background:#fafaf7;color:#222;line-height:1.6}
+h1{font-size:22px;margin:0 0 4px}.note{color:#666;font-size:13.5px}
+svg text{font-family:inherit}
+.bar{display:flex;gap:4px;flex-wrap:wrap;margin:10px 0}.bar span{font-size:12px;padding:2px 8px;border-radius:10px;background:#eee;cursor:pointer}.bar span.on{background:#c96;color:#fff}
+.bar span.g1{border-left:3px solid #7a9cc6}.bar span.g2{border-left:3px solid #8bb174}.bar span.g3{border-left:3px solid #c96}
+.panel{background:#fff;border:1px solid #e5e2da;border-radius:12px;padding:14px 16px;margin-top:8px}
+.panel h2{font-size:18px;margin:0 0 8px}
+.cols{display:flex;gap:16px;flex-wrap:wrap}.cols>.txt{flex:1.1;min-width:300px}.cols>.viz{flex:1;min-width:300px}
+.chips{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px}.chips span{background:#f4f1ea;border-radius:6px;padding:3px 9px;font-size:13px}
+.tokrow{display:flex;flex-wrap:wrap;gap:3px;margin:6px 0}.tk{padding:4px 6px;border-radius:5px;font-size:13px;border:1px solid #ddd;background:#fff;text-align:center;min-width:28px}
+.tk.sys{background:#eef2f8;color:#557}.tk.usr{background:#eef2f8;color:#557}.tk.ast{background:#fff1dc;border-color:#e9b777}.tk.sp{background:#eee;color:#888;font-size:11px}
+.tk small{display:block;font-size:11px;color:#888}
+table.t{border-collapse:separate;border-spacing:3px;font-size:13px;width:100%}
+table.t th{background:#fff;border:2px solid #ddd;border-radius:6px;padding:4px}
+table.t td{background:#fff;border:1px solid #eee;border-radius:5px;padding:4px;text-align:center;font-variant-numeric:tabular-nums}
+table.t td.l{text-align:left;border:0;background:transparent;color:#444;font-size:12.5px}
+table.t tr.hl td:not(.l){background:#fff1dc;border-color:#e9b777}
+.pos{color:#2a8a2a;font-weight:600}.neg{color:#c33;font-weight:600}
+.card{border:2px solid #ddd;border-radius:9px;padding:7px 9px;margin:5px 0;font-size:13.5px;background:#fff}
+.card.tr{border-color:#2a8a2a;background:#f1f9f0}.card.fz{border-color:#7a9cc6;background:#f2f6fb}
+code{background:#f4f1ea;padding:1px 5px;border-radius:4px;font-size:13px}
+pre{background:#f4f1ea;padding:8px 10px;border-radius:8px;font-size:12.5px;overflow-x:auto;line-height:1.45}
+button{background:#c96;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:15px;cursor:pointer;margin:3px}button.sec{background:#888}button:disabled{opacity:.4}
+.mem td{text-align:right}
+</style></head><body>
+<h1>从预训练模型到 PPO:RLHF 完整流程</h1>
+<p class="note">按 InstructGPT(ChatGPT 的前身)的做法画的。蓝色 = SFT,绿色 = 奖励模型,橙色 = PPO。标"典型值"的数字是常见设置,不同团队会不一样。点上面的步骤或"下一步"。</p>
+<svg id="map" viewBox="0 0 880 210" width="100%"></svg>
+<div class="bar" id="bar"></div>
+<div class="panel" id="panel"></div>
+<div style="margin-top:8px"><button class="sec" id="prev" onclick="go(cur-1)">← 上一步</button><button id="next" onclick="go(cur+1)">下一步 →</button></div>
+
+<script>
+// ---------- 顶部地图 ----------
+const NODES={pre:[70,60,"预训练模型","只会续写"],sft:[230,60,"① SFT","学会一问一答"],rm:[390,60,"② 奖励模型","学会打分"],
+ppo:[610,105,"③ PPO 循环",""],out:[810,60,"最终模型","给用户用"]};
+const RING={roll:[560,40,"生成"],score:[680,40,"三模型打分"],rew:[735,105,"每 token 奖励"],gae:[680,170,"GAE 优势"],upd:[560,170,"更新 K 轮"],mon:[505,105,"监控·重来"]};
+function drawMap(act){let h='<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c96"/></marker></defs>';
+const line=(x1,y1,x2,y2)=>`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#d8b48a" stroke-width="2.5" marker-end="url(#ar)" stroke-dasharray="6 4"><animate attributeName="stroke-dashoffset" from="20" to="0" dur="1s" repeatCount="indefinite"/></line>`;
+h+=line(122,60,175,60)+line(282,60,335,60)+line(442,60,500,80)+line(720,80,757,62);
+h+=`<ellipse cx="620" cy="105" rx="150" ry="92" fill="#fff8f0" stroke="#e9c9a0" stroke-dasharray="4 4"/>`;
+const ringOrder=["roll","score","rew","gae","upd","mon"];
+ringOrder.forEach((k,i)=>{const a=RING[k],b=RING[ringOrder[(i+1)%6]];h+=`<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#e9c9a0" stroke-width="1.5"/>`;});
+const col={pre:"#999",sft:"#7a9cc6",rm:"#8bb174",out:"#c96"};
+for(const k of["pre","sft","rm","out"]){const[x,y,t,s]=NODES[k];const on=act==k;h+=`<g><rect x="${x-52}" y="${y-26}" width="104" height="52" rx="10" fill="${on?col[k]:'#fff'}" stroke="${col[k]}" stroke-width="${on?3:2}"/><text x="${x}" y="${y-3}" text-anchor="middle" font-size="14" font-weight="600" fill="${on?'#fff':'#333'}">${t}</text><text x="${x}" y="${y+15}" text-anchor="middle" font-size="11" fill="${on?'#fff':'#888'}">${s}</text></g>`;}
+h+=`<text x="620" y="110" text-anchor="middle" font-size="14" font-weight="600" fill="#a86">③ PPO 循环</text><text x="620" y="128" text-anchor="middle" font-size="11" fill="#a86">重复几百~几千轮</text>`;
+for(const k of ringOrder){const[x,y,t]=RING[k];const on=act==k;h+=`<g><rect x="${x-44}" y="${y-14}" width="88" height="28" rx="14" fill="${on?'#c96':'#fff'}" stroke="#c96" stroke-width="${on?2.5:1.5}"/><text x="${x}" y="${y+5}" text-anchor="middle" font-size="12" fill="${on?'#fff':'#a86'}">${t}</text></g>`;}
+map.innerHTML=h;}
+
+// ---------- 小工具 ----------
+const tk=(t,c,s)=>`<span class="tk ${c}">${t}${s!==undefined?`<small>${s}</small>`:''}</span>`;
+const TOK=["您好","亲","点申请","退款"],P=[.30,.50,.40,.90],PR=[.30,.20,.40,.90],B=0.1,R=6.0,V=[3.7,3.5,1.8,4.9];
+const KL=P.map((p,i)=>Math.log(p/PR[i])),RW=KL.map((k,i)=>-B*k+(i==3?R:0)),D=RW.map((x,i)=>x+(i<3?V[i+1]:0)-V[i]);
+const A=(()=>{const a=[0,0,0,0];let l=0;for(let t=3;t>=0;t--){l=D[t]+0.95*l;a[t]=l;}return a;})();
+const f=(x,d=2)=>(x>0.004?'+':'')+x.toFixed(d),c=x=>x>0.004?'pos':x<-0.004?'neg':'';
+function ppoTable(hl){const rows=[["p","策略 actor 的概率 p",P.map(x=>x.toFixed(2))],["pr","参考模型的概率 p_ref",PR.map(x=>x.toFixed(2))],
+["kl","KL 惩罚 −β·ln(p/p_ref)",KL.map(k=>`<span class="${c(-B*k)}">${f(-B*k)}</span>`)],["rm","奖励模型 R(只在最后)",[0,0,0,R].map(x=>x?`<span class="pos">+${x.toFixed(1)}</span>`:'0')],
+["r","每 token 奖励 r_t",RW.map(x=>`<span class="${c(x)}">${f(x)}</span>`)],["v","critic 的 V_t",V.map(x=>x.toFixed(1))],
+["d","δ_t = r_t + V_{t+1} − V_t",D.map(x=>`<span class="${c(x)}">${f(x)}</span>`)],["a","优势 A_t(GAE, λ=0.95)",A.map(x=>`<span class="${c(x)}">${f(x)}</span>`)],
+["g","回报 G_t = A_t + V_t(critic 的目标)",A.map((x,i)=>(x+V[i]).toFixed(2))]];
+return `<table class="t"><tr><td class="l"></td><th style="color:#999">怎么退款?</th>${TOK.map(t=>`<th>${t}</th>`).join('')}</tr>`+rows.map(r=>`<tr class="${hl.includes(r[0])?'hl':''}"><td class="l">${r[1]}</td><td style="background:#f6f6f6"></td>${r[2].map(x=>`<td>${x}</td>`).join('')}</tr>`).join('')+'</table><p class="note">一条回答的示例数字(训练进行到中途,所以 p 和 p_ref 已经不同)。真实是一整批 512 条,每条几百个 token。</p>';}
+
+// ---------- 步骤 ----------
+const S=[
+{g:0,n:"全景",m:"",t:"全景:三个阶段",txt:`一个聊天模型从预训练模型出发,要经过三个阶段:
+<ol><li><b>SFT(监督微调)</b>:人写示范回答,模型照着模仿 → 学会"一问一答"。</li>
+<li><b>训练奖励模型 RM</b>:人给多个回答排序,训练一个会打分的模型 → 学会"哪个回答更好"。</li>
+<li><b>PPO</b>:模型自己生成回答,RM 打分,用强化学习改模型 → 回答越来越合人意。</li></ol>
+第 2、3 阶段合起来叫 <b>RLHF</b>(基于人类反馈的强化学习)。InstructGPT 三阶段用的提示词数量:SFT 约 1.3 万条、RM 约 3.3 万条、PPO 约 3.1 万条。`,viz:`<div class="card">预训练模型<br><span class="note">知识多,只会续写</span></div><div style="text-align:center">↓ SFT</div><div class="card" style="border-color:#7a9cc6">SFT 模型<br><span class="note">会一问一答,但好坏回答都会说</span></div><div style="text-align:center">↓ 训练 RM(用 SFT 模型的回答做标注)</div><div class="card" style="border-color:#8bb174">奖励模型 RM<br><span class="note">给一个回答 → 一个分数</span></div><div style="text-align:center">↓ PPO(SFT 模型 + RM 一起上)</div><div class="card" style="border-color:#c96">最终聊天模型</div>`,chips:["SFT ≈ 1.3 万条示范","RM ≈ 3.3 万条提示的排序","PPO ≈ 3.1 万条提示"]},
+{g:0,n:"起点:预训练模型",m:"pre",t:"起点:预训练模型(base model)",txt:`拿到手的是一个已经预训练完的大模型,比如 7B。它在<b>几万亿 token</b> 的网页、书、代码上做了"猜下一个 token"的训练(第 3 周的交叉熵)。<br><br>它知识很多,但<b>只会续写</b>:你输入"怎么退款?",它会按网上最常见的样子往下接,可能接成一个 FAQ 列表,而不是回答你。<br><br>后训练(post-training)的目标,就是在不丢掉这些知识的前提下,把它变成一个<b>会回答、回答得好</b>的助手。`,
+viz:`<div class="tokrow">${tk('怎么','usr')}${tk('退款','usr')}${tk('?','usr')}</div><div class="note">预训练模型可能的续写:</div><div class="tokrow">${['怎么','改','密码','?','怎么','注销','账号','?'].map(t=>tk(t,'')).join('')}</div><div class="note">(网上的 FAQ 页面就长这样,它只是在模仿网页)</div>`,chips:["7B 参数","训练数据:几万亿 token","目标:猜下一个 token"]},
+{g:1,n:"SFT ① 数据",m:"sft",t:"SFT ①:示范数据 + 对话模板",txt:`请标注员针对各种提示词,<b>亲手写出理想的回答</b>,一般 1 万到 10 万条。也可以是多轮对话或工具调用的轨迹。<br><br>每条数据用<b>对话模板</b>(chat template)拼成一串文字,用特殊 token 标出谁在说话、哪里结束。模型以后看到 <code>&lt;|assistant|&gt;</code> 就知道该轮到自己回答,看到 <code>&lt;|end|&gt;</code> 就停。<br><br>然后用分词器切成 token 编号。`,
+viz:`<pre>{"messages":[
+ {"role":"system","content":"你是客服助手"},
+ {"role":"user","content":"怎么退款?"},
+ {"role":"assistant","content":"在我的订单里点申请退款"}]}</pre><div class="note">↓ 套模板、分词后:</div><div class="tokrow">${tk('&lt;|system|&gt;','sp')}${tk('你是客服助手','sys')}${tk('&lt;|user|&gt;','sp')}${tk('怎么','usr')}${tk('退款','usr')}${tk('?','usr')}${tk('&lt;|assistant|&gt;','sp')}${['在','我的订单','里','点','申请','退款'].map(t=>tk(t,'ast')).join('')}${tk('&lt;|end|&gt;','ast')}</div>`,chips:["1 万~10 万条(典型值)","人写的示范回答","对话模板 + 特殊 token"]},
+{g:1,n:"SFT ② loss",m:"sft",t:"SFT ②:只给回答部分算 loss",txt:`把整串 token 喂进模型,<b>一次前向</b>得到每个位置"下一个 token"的概率表(因果 mask 保证每个位置只看得到前面)。<br><br>每个位置的 loss = −ln(正确的下一个 token 的概率),和预训练一模一样。<br><br>区别只有一个:<b>system 和 user 部分的 loss 全部遮掉</b>(代码里把它们的 label 设成 −100),只平均 assistant 部分(橙色,包括结束符)。因为问题是给定的,我们只想让模型学"怎么答",不想让它学"怎么问"。`,
+viz:`<div class="note">每个 token 下面是模型给它的概率 → 灰色不算,橙色算:</div><div class="tokrow">${tk('&lt;|user|&gt;','sp','不算')}${tk('怎么','usr','不算')}${tk('退款','usr','不算')}${tk('?','usr','不算')}${tk('&lt;|assistant|&gt;','sp','不算')}${[['在',.20],['我的订单',.35],['里',.80],['点',.40],['申请',.70],['退款',.90],['&lt;|end|&gt;',.60]].map(([t,p])=>tk(t,'ast',p)).join('')}</div>
+<div class="note">loss = 平均[ −ln 0.20, −ln 0.35, −ln 0.80, −ln 0.40, −ln 0.70, −ln 0.90, −ln 0.60 ]<br>= (1.61 + 1.05 + 0.22 + 0.92 + 0.36 + 0.11 + 0.51) ÷ 7 = <b>0.68</b></div>`,chips:["loss = 交叉熵","user/system 的 label = −100(遮掉)","只平均 assistant 的 token"]},
+{g:1,n:"SFT ③ 训练",m:"sft",t:"SFT ③:训练,得到 SFT 模型",txt:`标准的训练循环:前向 → loss → 反向传播 → AdamW 更新<b>全部权重</b>(全参微调),或者只更新 LoRA 的小矩阵 A、B。<br><br>通常训练 2~3 遍(epoch),学习率很小,因为只想教会它"格式和风格",不想冲掉预训练学到的知识。训练太久会过拟合,反而变笨。<br><br><b>产出:SFT 模型 π_SFT</b>。它会一问一答了,但同一个问题多问几次,好回答、啰嗦的、胡编的都可能出现。接下来两个阶段都从它出发。`,
+viz:`<pre>for batch in sft_data:            # 2~3 个 epoch
+    logits = model(batch.input_ids)
+    loss = cross_entropy(logits, batch.labels,
+                         ignore_index=-100)  # 只算回答
+    loss.backward()
+    optimizer.step(); optimizer.zero_grad()</pre><div class="card tr">产出:SFT 模型 π_SFT<br><span class="note">后面会被复制成:PPO 的 actor、参考模型,以及 RM 的起点</span></div>`,chips:["学习率 ≈ 1e-5~2e-5(典型值)","2~3 个 epoch","全参或 LoRA"]},
+{g:2,n:"RM ① 排序数据",m:"rm",t:"奖励模型 ①:生成多个回答,人来排序",txt:`取一批新的提示词,让 <b>SFT 模型对每个提示生成 K 个回答</b>(InstructGPT 是 4~9 个)。<br><br>标注员<b>把这 K 个回答从好到差排序</b>。排序比打 1~10 分更可靠:不同人打分的尺度差很多,但"哪个更好"的判断比较一致。<br><br>一个排序可以拆成 C(K,2) 个"A 比 B 好"的对。K = 4 时是 6 对,K = 9 时是 36 对。`,
+viz:`<div class="card">提示:怎么退款?</div><div class="tokrow">${tk('A 简洁准确','')}${tk('B 详细准确','')}${tk('C 胡编政策','')}${tk('D 敷衍一句','')}</div><div class="note">标注员排序:<b>B > A > D > C</b></div><div class="note">拆成 C(4,2) = 6 对:</div><div class="tokrow">${['B≻A','B≻D','B≻C','A≻D','A≻C','D≻C'].map(x=>tk(x,'ast')).join('')}</div>`,chips:["每个提示 K = 4~9 个回答","人工排序","一个排序 → C(K,2) 对"]},
+{g:2,n:"RM ② 结构",m:"rm",t:"奖励模型 ②:结构 = SFT 模型 + 一个打分头",txt:`RM 通常从 <b>SFT 模型</b>初始化(它已经读得懂对话),做一个改动:<br><br>去掉最后输出 5 万多个词概率的 LM head,换成一个<b>输出 1 个数</b>的线性层 <b>r = w·h + b</b>。<br><br>h 取<b>最后一个 token</b> 的隐藏向量(读到它时,整段"提示 + 回答"都看过了)。所以给它一段完整的对话,它就吐出一个分数。<br><br>InstructGPT 的 RM 用的是 6B 的模型,比 175B 的策略模型小得多。`,
+viz:`<svg viewBox="0 0 380 210" width="100%"><g font-size="12">
+<rect x="10" y="170" width="360" height="30" rx="6" fill="#eef2f8" stroke="#99a"/><text x="190" y="190" text-anchor="middle">提示 + 回答的 token(怎么退款?… 申请退款 &lt;|end|&gt;)</text>
+<rect x="40" y="80" width="300" height="70" rx="8" fill="#fff" stroke="#8bb174" stroke-width="2"/><text x="190" y="110" text-anchor="middle" font-size="14">Transformer 主干(从 SFT 模型复制)</text><text x="190" y="130" text-anchor="middle" fill="#888">LM head 去掉</text>
+<line x1="190" y1="170" x2="190" y2="150" stroke="#888" marker-end="url(#a2)"/>
+<circle cx="320" cy="62" r="10" fill="#fff1dc" stroke="#e9b777"/><text x="300" y="66" text-anchor="end">最后一个 token 的 h(4096 维)</text>
+<line x1="320" y1="80" x2="320" y2="72" stroke="#888"/>
+<rect x="270" y="10" width="100" height="32" rx="6" fill="#8bb174"/><text x="320" y="31" text-anchor="middle" fill="#fff">r = w·h + b</text>
+<line x1="320" y1="52" x2="320" y2="42" stroke="#888"/></g>
+<defs><marker id="a2" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6z" fill="#888"/></marker></defs></svg>`,chips:["从 SFT 模型初始化","LM head → 标量头(4096 → 1)","读最后一个 token 的 h"]},
+{g:2,n:"RM ③ 训练",m:"rm",t:"奖励模型 ③:用「A 比 B 好」训练",txt:`对每一对 (好的, 差的),把两段对话分别喂进 RM,得到两个分数 r_好、r_差。<br><br><b>loss = −ln σ(r_好 − r_差)</b>:σ(差) 是"模型认为人会选好的那个"的概率,训练就是把它推向 100%。<br><br>同一个提示的 C(K,2) 对放在同一个 batch 里一起算,通常只训练 <b>1 个 epoch</b>(多了容易过拟合)。训练完在留出的数据上测"和人一致的比例",一般在 70% 左右,人和人之间的一致率也就这么高。<br><br><b>产出:奖励模型 RM,冻住</b>。`,
+viz:`<div class="card">好的回答 B → RM → r_好 = <b>1.2</b></div><div class="card">差的回答 A → RM → r_差 = <b>−0.3</b></div><div class="note">差 = 1.5 → σ(1.5) = 0.818 → loss = −ln 0.818 = <b>0.20</b><br>如果 RM 反过来给了 A 更高的分(差 = −1.5),σ = 0.18,loss = 1.70,梯度会把它纠正过来。<br>注意:分数本身没有绝对意义,只有差值有意义。</div><div class="card fz">产出:RM(冻住,PPO 里只负责打分)</div>`,chips:["loss = −ln σ(r_好 − r_差)","通常 1 个 epoch","和人一致率 ≈ 70%(典型值)"]},
+{g:3,n:"PPO 准备",m:"ppo",t:"PPO 准备:4 个模型 + 显存账",txt:`开始 PPO 前,准备 4 个模型:
+<div class="card tr"><b>actor(策略)</b> ← 复制 SFT 模型。<b>训练</b>,就是最后要交付的模型。</div>
+<div class="card fz"><b>reference(参考)</b> ← 再复制一份 SFT 模型。<b>冻住</b>,用来算 KL 惩罚。</div>
+<div class="card fz"><b>reward model</b> ← 上一阶段训好的 RM。<b>冻住</b>,只打分。</div>
+<div class="card tr"><b>critic(价值)</b> ← InstructGPT 用 <b>RM 的权重</b>初始化,但每个位置都输出一个 V。<b>训练</b>。</div>`,
+viz:`<div class="note">以 7B 为例的显存账(混合精度训练,每个要训练的参数约 16 字节:fp16 权重 2 + 梯度 2 + fp32 主权重和 Adam 两个状态 12):</div>
+<table class="t mem"><tr><th>模型</th><th>状态</th><th>显存</th></tr><tr><td class="l">actor 7B</td><td>训练</td><td>7B × 16 = 112 GB</td></tr><tr><td class="l">critic 7B</td><td>训练</td><td>7B × 16 = 112 GB</td></tr><tr><td class="l">reference 7B</td><td>冻住</td><td>7B × 2 = 14 GB</td></tr><tr><td class="l">RM 7B</td><td>冻住</td><td>7B × 2 = 14 GB</td></tr><tr><td class="l"><b>合计</b></td><td></td><td><b>252 GB</b> + 激活值 + 生成时的 KV cache</td></tr></table>
+<div class="note">→ 至少要 4 张 80 GB 卡,实际通常 8 卡起步。这正是 DPO / GRPO 想省掉的成本。</div>`,chips:["actor ← SFT(训练)","reference ← SFT(冻住)","RM(冻住)","critic ← RM(训练)","7B 约 252 GB 起"]},
+{g:3,n:"PPO ① 生成",m:"roll",t:"PPO ① 生成(rollout)",txt:`从 PPO 提示词池里取一批,比如 <b>512 条</b>。<br><br>actor <b>逐个 token 采样</b>生成回答(温度 1,不做贪心,这样才有探索),最长比如 512 个 token,遇到结束符就停。<br><br>同时记下每个生成 token 当时的 log 概率 <b>logp_old</b>,后面算 ratio 要用。<br><br>这一步最慢:一个 token 一个 token 地生成(第 7 周讲的 decode),所以后面同一批数据要反复用几轮。`,
+viz:`<div class="note">一条示例(真实是 512 条一起生成):</div><div class="tokrow">${tk('怎么','usr')}${tk('退款','usr')}${tk('?','usr')}${TOK.map((t,i)=>tk(t,'ast','p='+P[i].toFixed(2))).join('')}</div><div class="note">得到的数据:<br>token 编号 (512 × T) · logp_old (512 × T)</div>`,chips:["512 条提示 / 批(典型值)","温度 1 采样","记录 logp_old","最慢的一步"]},
+{g:3,n:"PPO ② 打分",m:"score",t:"PPO ② 三个模型各做一次前向(不算梯度)",txt:`把"提示 + 生成的回答"这同一串 token,分别喂给三个模型,<b>各做一次前向</b>,一次得到所有位置的结果:
+<ul><li><b>reference</b> → 每个 token 的 <b>logp_ref</b>(512 × T)</li><li><b>critic</b> → 每个位置的 <b>V_t</b>(512 × T):写这个 token 之前,预计最后能拿几分</li><li><b>RM</b> → 读到最后一个 token,吐出整段的分数 <b>R</b>(512 个数)</li></ul>
+这一步不改任何权重,只是收集数据。`,viz:ppoTable(["pr","rm","v"]),chips:["reference → logp_ref","critic → V_t","RM → R(每条 1 个)"]},
+{g:3,n:"PPO ③ 奖励",m:"rew",t:"PPO ③ 每个 token 的奖励 r_t",txt:`<b>r_t = −β · (logp_old − logp_ref)</b>,最后一个 token 再<b>加上 R</b>。<br><br>前半部分就是 <b>KL 惩罚</b>(我们说的"绳子"):每个 token 都单独算,actor 比参考模型更爱说的 token 扣分,更不爱说的反而加分,总体效果是拉着 actor 别离 SFT 太远。β 典型值 0.01~0.1(InstructGPT 是 0.02),有的实现会根据 KL 自动调 β。<br><br>示例里只有"亲"扣了 0.1 × ln(0.50/0.20) = 0.09;RM 的 6.0 只落在"退款"上。`,viz:ppoTable(["kl","rm","r"]),chips:["r_t = −β·KL_t + [最后] R","β ≈ 0.02(InstructGPT)","第 1 轮 KL 全是 0"]},
+{g:3,n:"PPO ④ GAE",m:"gae",t:"PPO ④ GAE:把奖励分成每个 token 的优势",txt:`先算每个 token 让预期变了多少:<b>δ_t = r_t + V_{t+1} − V_t</b>(最后一个 token 之后 V = 0)。<br><br>再用 GAE 把后面的 δ 按比例加进来:<b>A_t = δ_t + γλ·A_{t+1}</b>,典型 γ = 1、λ = 0.95。<br><br>critic 的学习目标(回报):<b>G_t = A_t + V_t</b>。<br><br>最后把整批所有 token 的 A 做<b>标准化</b>(减均值、除标准差),所以真正决定"推高还是压低"的,是这个 token 比整批平均好还是差。<br><br>看表里的"亲":它自己的 δ 是 <b>−1.79</b>(让预期掉了),但 GAE 之后 A 是 <b>+2.15</b>,因为它后面接上了很好的"点申请"(+3.1),GAE 让它也分到一部分。λ 越小,越只看自己;λ = 0 时 A 就等于 δ。`,viz:ppoTable(["d","a","g"]),chips:["δ_t = r_t + V_{t+1} − V_t","A_t = δ_t + 0.95·A_{t+1}","G_t = A_t + V_t","A 整批标准化"]},
+{g:3,n:"PPO ⑤ 更新",m:"upd",t:"PPO ⑤ 更新:同一批数据用 K 轮",txt:`把这批数据打乱分成小批,重复 <b>K = 4 轮</b>(典型值)。每个小批:
+<ol><li>actor 重新前向(这次算梯度)→ <b>logp_new</b></li><li><b>ratio_t = e^(logp_new − logp_old)</b></li><li><b>策略 loss</b> = −平均[ min(ratio·A, clip(ratio, 0.8, 1.2)·A) ]</li><li>critic 重新前向 → V_new;<b>价值 loss</b> = 平均[ (V_new − G)² ](通常也做 clip)</li><li>反向传播,AdamW 更新 actor 和 critic 的<b>全部权重</b>(学习率约 1e-6 量级)</li></ol>
+clip 的效果:某个 token 的 ratio 已经超出 [0.8, 1.2],并且还在往 A 推的方向走,它那一项的梯度就是 0。<br><br>InstructGPT 还加了 <b>PPO-ptx</b>:在 loss 里混入一点预训练数据的交叉熵,防止模型在常规任务上退化。`,
+viz:`<pre>for epoch in range(4):                       # 同一批用 4 轮
+  for mb in minibatches(batch):
+    logp_new = actor(mb.ids).logp(mb.tokens)
+    ratio = exp(logp_new - mb.logp_old)
+    pg = -min(ratio*mb.A,
+              clip(ratio, 0.8, 1.2)*mb.A).mean()
+    v_loss = ((critic(mb.ids) - mb.G)**2).mean()
+    (pg + 0.5*v_loss).backward()   # (+ ptx 项)
+    opt.step(); opt.zero_grad()</pre><div class="note">例:"点申请"A 为正,ratio 从 1.00 → 1.07 → 1.14 → 1.21,第 3 轮超过 1.2,之后这个 token 不再推。</div>`,chips:["K = 4 轮(典型值)","clip ε = 0.2","actor lr ≈ 1e-6 量级","PPO-ptx 防退化"]},
+{g:3,n:"PPO ⑥ 监控",m:"mon",t:"PPO ⑥ 扔掉这批,盯指标,重来",txt:`4 轮用完,这批数据<b>整批扔掉</b>,回到 ① 用新的 actor 重新生成。reference 和 RM 始终不变。重复几百到几千轮。<br><br>训练时要盯这几条曲线:`,
+viz:`<table class="t"><tr><th>指标</th><th>健康</th><th>出问题</th></tr>
+<tr><td class="l">平均奖励 R</td><td>慢慢上升</td><td>涨得飞快 → 可能在钻 RM 的空子</td></tr>
+<tr><td class="l">KL(actor ‖ ref)</td><td>慢慢变大,稳定</td><td>暴涨 → β 太小或学习率太大</td></tr>
+<tr><td class="l">回答长度</td><td>基本稳定</td><td>越来越长 → 长度偏见被放大</td></tr>
+<tr><td class="l">clip 比例</td><td>10%~20%</td><td>接近 0 → 学得太慢;很高 → 推得太猛</td></tr>
+<tr><td class="l">人工抽查 / 评测集</td><td>变好</td><td>分数涨但人觉得变差 → reward hacking</td></tr></table>`,chips:["整批扔掉,重新生成","reference / RM 不变","盯奖励、KL、长度、clip 比例"]},
+{g:3,n:"产出",m:"out",t:"产出:最终的聊天模型",txt:`训练结束后,<b>只留下 actor</b>,这就是交付给用户的模型(比如 InstructGPT、ChatGPT)。<br><br>reference、RM、critic 都只是训练时的工具,用完就不要了。<br><br>回顾整个后训练:
+<ol><li><b>SFT</b>:示范数据 + 交叉熵(只算回答)→ 会回答</li><li><b>RM</b>:排序数据 + −ln σ(r_好 − r_差) → 会打分</li><li><b>PPO</b>:生成 → 三模型打分 → r_t = −β·KL + R → GAE → clip 更新 4 轮 → 重来 → 回答更合人意</li></ol>
+后面两课:<b>DPO</b> 把第 2、3 步合成一步,不要 RM、critic 和生成;<b>GRPO</b> 保留第 3 步,但去掉 critic。`,viz:`<div class="card tr"><b>actor</b> → 最终模型 ✅ 交付</div><div class="card" style="opacity:.5">reference → 丢弃</div><div class="card" style="opacity:.5">RM → 丢弃(或留着做评测)</div><div class="card" style="opacity:.5">critic → 丢弃</div>`,chips:["只交付 actor","DPO:去掉 RM + critic + 生成","GRPO:去掉 critic"]}
+];
+let cur=0;
+function go(i){if(i<0||i>=S.length)return;cur=i;const s=S[i];drawMap(s.m);
+bar.innerHTML=S.map((x,j)=>`<span class="${j==i?'on':''} g${x.g}" onclick="go(${j})">${x.n}</span>`).join('');
+panel.innerHTML=`<h2>${s.t}</h2><div class="cols"><div class="txt">${s.txt}</div><div class="viz">${s.viz}</div></div><div class="chips">${s.chips.map(x=>`<span>${x}</span>`).join('')}</div>`;
+prev.disabled=i==0;next.disabled=i==S.length-1;}
+go(0);
+</script></body></html>

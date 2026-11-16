@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSeek-R1 训练流程</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* 布局:顶部一条共同起点,下面左右两条泳道(R1-Zero 实验 / R1 正式版),最后蒸馏 */
+  --bg:#f5f6f8; --panel:#ffffff; --ink:#1b2330; --muted:#5b6676; --line:#dde2ea; --soft:#eef1f5;
+  --sft:#0f766e; --rl:#2563eb; --rm:#b45309; --warn:#be123c;
+  --display:"Noto Serif SC","Songti SC",serif; --body:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12161c;--panel:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2c3440;--soft:#222a35;--sft:#2dd4bf;--rl:#60a5fa;--rm:#f59e0b;--warn:#fb7185;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#12161c;--panel:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2c3440;--soft:#222a35;--sft:#2dd4bf;--rl:#60a5fa;--rm:#f59e0b;--warn:#fb7185;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15.5px;line-height:1.7}
+main{max-width:980px;margin:0 auto;padding:22px 16px 60px;display:flex;flex-direction:column;gap:18px}
+h1{font-family:var(--display);font-size:29px;margin:4px 0 2px;text-wrap:balance}
+h2{font-family:var(--display);font-size:19px;margin:0 0 8px;text-wrap:balance}
+p{margin:0 0 8px;max-width:72ch}
+.lead{color:var(--muted)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;background:var(--c);vertical-align:-2px}
+.start{background:var(--panel);border:2px solid var(--ink);border-radius:12px;padding:12px 16px;text-align:center}
+.start b{font-size:17px}
+.lanes{display:grid;grid-template-columns:1fr 1.45fr;gap:16px;align-items:start}
+.lane{display:flex;flex-direction:column;gap:10px}
+.lane > h2{margin:4px 0 0}
+.lane .tag{font-size:13px;color:var(--muted);margin-top:-6px}
+.step{background:var(--panel);border:1px solid var(--line);border-left:5px solid var(--c);border-radius:10px;padding:10px 14px}
+.step .k{font-family:var(--mono);font-size:12.5px;color:var(--c);font-weight:600;letter-spacing:.02em}
+.step h3{margin:2px 0 4px;font-size:16px}
+.step ul{margin:4px 0 0;padding-left:18px;font-size:14px}
+.step li{margin:2px 0}
+.map{display:inline-block;font-size:12.5px;background:var(--soft);border-radius:999px;padding:1px 10px;margin-top:6px;color:var(--ink)}
+.arrow{text-align:center;color:var(--muted);font-size:18px;line-height:1}
+.out{background:var(--soft);border:1px dashed var(--line);border-radius:10px;padding:10px 14px;font-size:14px}
+.out b{font-size:15px}
+.bad{color:var(--warn)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:13px}
+.scroll{overflow-x:auto}
+@media (max-width:760px){.lanes{grid-template-columns:1fr}h1{font-size:24px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>DeepSeek-R1 训练流程</h1>
+  <p class="lead">先做了一个大胆的实验 R1-Zero:不做 SFT,直接用规则奖励 + GRPO 练推理,结果推理能力自己长出来了,但写得乱。正式版 R1 再把 SFT 加回来,分 4 个阶段练成,最后把能力蒸馏给小模型。每一步都标出了它对应你这周学过的哪一课。</p>
+  <div class="legend"><span style="--c:var(--sft)">SFT(监督微调,L0)</span><span style="--c:var(--rl)">GRPO 强化学习(L4)</span><span style="--c:var(--rm)">奖励模型(L1)</span></div>
+</header>
+
+<div class="start"><b>起点:DeepSeek-V3-Base</b><br><span class="num">671B</span> 参数的 MoE 预训练模型,每个 token 激活 <span class="num">37B</span>(第 8 周学过)。只会续写,没经过 SFT。</div>
+<div class="arrow">↓ 分成两条路</div>
+
+<div class="lanes">
+  <div class="lane">
+    <h2>路线 A:R1-Zero(实验)</h2>
+    <div class="tag">问题:不教示范,纯靠奖励,模型能自己学会推理吗?</div>
+    <div class="step" style="--c:var(--rl)">
+      <div class="k">唯一一步 · GRPO</div>
+      <h3>直接在 Base 上做强化学习</h3>
+      <ul>
+        <li>提示模板要求:先把思考写在 &lt;think&gt;…&lt;/think&gt; 里,再给答案</li>
+        <li>奖励全是<b>规则</b>:<br>准确率:数学答案对不对、代码能不能通过测试<br>格式:思考有没有放进 &lt;think&gt; 标签</li>
+        <li>不用奖励模型:怕被钻空子,而且多一个大模型要训</li>
+      </ul>
+      <span class="map">= 你的 grpo.py 的 "acc+fmt",放大到 671B</span>
+    </div>
+    <div class="out">
+      <b>结果:推理能力自己长出来了</b>
+      <ul style="margin:4px 0 0;padding-left:18px">
+        <li>AIME 2024 数学竞赛 pass@1:<span class="num">15.6% → 71.0%</span>(多数投票 <span class="num">86.7%</span>)</li>
+        <li>没人要求,回答却越写越长:模型自己学会了「多想一会儿」</li>
+        <li>出现自我检查、回头重算,论文里叫 aha moment</li>
+        <li class="bad">问题:可读性差,中英文混着写</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="lane">
+    <h2>路线 B:DeepSeek-R1(正式版,4 个阶段)</h2>
+    <div class="tag">目标:保住推理能力,同时写得清楚、什么任务都能做</div>
+    <div class="step" style="--c:var(--sft)">
+      <div class="k">阶段 1 · 冷启动 SFT</div>
+      <h3>先用几千条长思维链示范做 SFT</h3>
+      <ul><li>示范写得规整、可读,让模型一开始就有好的写法</li><li>RL 从一个靠谱的起点出发,收敛更快、更稳</li></ul>
+      <span class="map">= L0 sft.py</span>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="step" style="--c:var(--rl)">
+      <div class="k">阶段 2 · 推理 RL(GRPO)</div>
+      <h3>和 R1-Zero 一样练推理,多加一个语言一致性奖励</h3>
+      <ul><li>奖励 = 准确率(规则)+ 语言一致性(思考里目标语言的词占多少)</li><li>专治 R1-Zero 的中英混写;推理分数略降一点,换来可读性</li></ul>
+      <span class="map">= L4 grpo.py,奖励多一项</span>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="step" style="--c:var(--sft)">
+      <div class="k">阶段 3 · 拒绝采样 + 再 SFT</div>
+      <h3>让阶段 2 的模型大量答题,只留好的,再拿去做 SFT</h3>
+      <ul><li>推理数据约 <span class="num">60 万</span>条:答对、写得清楚的才留(拒绝采样)</li><li>非推理数据约 <span class="num">20 万</span>条:写作、问答、翻译等,来自 V3 的流程</li><li>合计约 <span class="num">80 万</span>条,<b>回到 V3-Base</b> 上重新 SFT 2 个 epoch</li></ul>
+      <span class="map">= 采一组回答挑好的(像 GRPO 采样)+ L0 SFT</span>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="step" style="--c:var(--rm)">
+      <div class="k">阶段 4 · 全场景 RL</div>
+      <h3>再做一轮 RL,兼顾推理、有用、无害</h3>
+      <ul><li>推理题:继续用规则奖励</li><li>通用题:用<b>奖励模型</b>判断有用、无害(人类偏好)</li></ul>
+      <span class="map">= L1 奖励模型 + L4 GRPO</span>
+    </div>
+    <div class="out"><b>得到 DeepSeek-R1</b>:推理接近当时最强的闭源推理模型,而且回答可读、通用任务也能做。</div>
+  </div>
+</div>
+
+<div class="arrow">↓ 把能力传给小模型</div>
+<div class="step" style="--c:var(--sft)">
+  <div class="k">蒸馏 · 只做 SFT</div>
+  <h3>用那 80 万条数据,直接 SFT 小模型</h3>
+  <ul>
+    <li>学生模型:Qwen2.5 的 1.5B / 7B / 14B / 32B,Llama 3 的 8B / 70B,得到 R1-Distill 系列</li>
+    <li>只做 SFT,不做 RL。论文对比过:在小模型上直接做大规模 RL,效果不如蒸馏,还更贵</li>
+  </ul>
+  <span class="map">= L0 sft.py,只是数据换成大模型写的</span>
+</div>
+
+<section class="box">
+  <h2>论文里也写了没成功的尝试</h2>
+  <p><b>过程奖励模型(PRM)</b>:给每一步推理打分。难在「一步」不好界定,中间步骤对不对也难标,而且模型奖励一多就容易被钻空子。<br><b>蒙特卡洛树搜索(MCTS)</b>:像下棋那样搜索推理路径。语言的搜索空间比棋盘大太多,训练起来很难扩展。</p>
+</section>
+
+<section class="box">
+  <h2>一张表对上这周学的</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>R1 里的环节</th><th>你这周的哪一课</th><th>这周实验里看到的现象</th></tr></thead>
+    <tbody>
+      <tr><td>冷启动 SFT、拒绝采样后 SFT、蒸馏</td><td>L0 sft.py</td><td>loss 4.57 → 0.24,学会客服的说法,但取消、改地址还会答成退款</td></tr>
+      <tr><td>规则奖励:准确率 + 格式</td><td>L4 grpo.py 的 acc+fmt</td><td>只看准确率时,「停住」学不会;加格式分 5/12 → 8/12</td></tr>
+      <tr><td>GRPO 组内优势</td><td>L4</td><td>全对或全错的组 A = 0,白采</td></tr>
+      <tr><td>语言一致性奖励</td><td>L4 的思路</td><td>奖励量什么,模型就学什么</td></tr>
+      <tr><td>全场景 RL 里的奖励模型</td><td>L1 reward.py</td><td>裁判会被钻空子(长度偏好)</td></tr>
+      <tr><td>不用 DPO</td><td>L3</td><td>DPO 离线,不能自己探索新解法;R1 要模型自己想出更长的推理</td></tr>
+    </tbody>
+  </table></div>
+</section>
+</main>
+</body>
+</html>

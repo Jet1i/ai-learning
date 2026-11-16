@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PPO 按 token 的完整流程</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;max-width:860px;margin:0 auto;padding:16px;background:#fafaf7;color:#222;line-height:1.55}
+h1{font-size:22px;margin-bottom:4px}.note{color:#666;font-size:14px}
+.models{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.m{border:2px solid #ccc;border-radius:8px;padding:4px 10px;font-size:14px;background:#fff;opacity:.4;transition:.3s}
+.m.on{opacity:1;border-color:#c96;background:#fff8f0;box-shadow:0 0 0 3px #f6e2cc}.m.tr{opacity:1;border-color:#2a8a2a;background:#e6f4e6;box-shadow:0 0 0 3px #d3ecd3}
+table{border-collapse:separate;border-spacing:4px;width:100%;font-size:14px}
+th{font-weight:600;padding:6px;background:#fff;border:2px solid #ddd;border-radius:8px;font-size:15px}
+th.prompt{color:#888;background:#f3f3f3}
+td{background:#fff;border:1px solid #eee;border-radius:6px;padding:6px;text-align:center;font-variant-numeric:tabular-nums;min-width:70px;height:22px;transition:background .4s}
+td.lab{text-align:left;background:transparent;border:0;color:#444;font-size:13px;width:170px}
+td.hide{color:transparent;background:#fafaf7;border-color:#f0f0f0}
+td.hl{background:#fff1dc;border-color:#e9b777}
+.pos{color:#2a8a2a;font-weight:600}.neg{color:#c33;font-weight:600}.off{background:#eee !important;color:#999 !important;text-decoration:line-through}
+#exp{background:#f4f1ea;border-radius:8px;padding:10px 12px;min-height:96px;margin-top:10px}
+button{background:#c96;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:15px;cursor:pointer;margin:3px}
+button.sec{background:#888}button:disabled{opacity:.4}
+.stepbar{display:flex;gap:4px;flex-wrap:wrap;margin:8px 0}.stepbar span{font-size:12px;padding:2px 7px;border-radius:10px;background:#eee;cursor:pointer}.stepbar span.on{background:#c96;color:#fff}
+#lamBox{display:none;margin-top:6px}
+</style></head><body>
+<h1>PPO 按 token 的完整流程</h1>
+<p class="note">一条数据:问题"怎么退款?",策略模型写了 4 个 token。这是<b>训练进行到第 30 轮</b>时的一批(第 1 轮时策略和对照一模一样,绳子那一行会全是 0)。β = 0.1。点"下一步"。</p>
+<div class="models" id="models"></div>
+<div class="stepbar" id="bar"></div>
+<table>
+<thead><tr><td class="lab"></td><th class="prompt">怎么退款?</th><th id="h0">您好</th><th id="h1">亲</th><th id="h2">点申请</th><th id="h3">退款</th></tr></thead>
+<tbody id="tb"></tbody>
+</table>
+<div id="lamBox">GAE 的 λ:<input id="lam" type="range" min="0" max="0.95" step="0.05" value="0.95" style="width:200px;vertical-align:middle"> <b id="lamV">0.95</b> <span class="note">(0 = 只看这个 token 自己;0.95 = 真实 PPO 常用值,也替后面的结果分担一部分)</span></div>
+<div id="exp"></div>
+<div><button class="sec" id="prev" onclick="go(cur-1)">← 上一步</button><button id="next" onclick="go(cur+1)">下一步 →</button><button class="sec" onclick="go(0)">重来</button><span id="extra"></span></div>
+
+<script>
+const TOK=["您好","亲","点申请","退款"],P=[.30,.50,.40,.90],PR=[.30,.20,.40,.90],B=0.1,R=6.0,V=[3.7,3.5,1.8,4.9];
+const rope=P.map((p,i)=>-B*Math.log(p/PR[i]));const rm=[0,0,0,R];const r=rope.map((x,i)=>x+rm[i]);
+const delta=r.map((x,i)=>x+(i<3?V[i+1]:0)-V[i]);
+function gae(l){const a=[0,0,0,0];let last=0;for(let t=3;t>=0;t--){last=delta[t]+l*last;a[t]=last;}return a;}
+const f=(x,d=2)=>(x>0?'+':'')+x.toFixed(d);
+const cls=x=>x>0.005?'pos':x<-0.005?'neg':'';
+const ROWS=[
+{k:"p",lab:"策略模型:写这个 token 的概率",prompt:"(输入)",cells:P.map(x=>x.toFixed(2))},
+{k:"pr",lab:"对照模型:写这个 token 的概率",prompt:"(输入)",cells:PR.map(x=>x.toFixed(2))},
+{k:"rope",lab:"🪢 绳子 −β·ln(p/p对照)",prompt:"",cells:rope.map(x=>`<span class="${cls(x)}">${f(x)}</span>`)},
+{k:"rm",lab:"⚖️ 裁判(只给最后一个)",prompt:"",cells:rm.map(x=>x?`<span class="pos">+${x.toFixed(1)}</span>`:'0')},
+{k:"r",lab:"每个 token 的奖励 r",prompt:"",cells:r.map(x=>`<span class="${cls(x)}">${f(x)}</span>`)},
+{k:"v",lab:"📈 价值模型 V(写之前的预期)",prompt:"",cells:V.map(x=>x.toFixed(1))},
+{k:"d",lab:"δ = r + 下一个V − 这个V",prompt:"",cells:delta.map(x=>`<span class="${cls(x)}">${f(x)}</span>`)},
+{k:"a",lab:"优势 A(GAE)",prompt:"",cells:null},
+{k:"ratio",lab:"✂️ ratio = p新 / p旧",prompt:"",cells:null}
+];
+let shown=0,cur=0,lam=0.95,ep=0,timer=null;
+const RATIO_PATH=[[1,.97,.94,.92,.90],[1,.93,.86,.79,.79],[1,1.07,1.14,1.21,1.21],[1,1.04,1.08,1.12,1.16]];
+function ratioCells(){const a=gae(lam);return RATIO_PATH.map((path,i)=>{const x=path[Math.min(ep,4)];const off=(a[i]>0&&x>1.2)||(a[i]<0&&x<0.8);return {html:`${x.toFixed(2)}${off?' ✂️':''}`,off};});}
+function draw(hlRow,hlCols){let h='';ROWS.forEach((row,ri)=>{if(ri>=shown){h+=`<tr><td class="lab" style="color:#ccc">${row.lab}</td><td class="hide">.</td>${TOK.map(()=>'<td class="hide">.</td>').join('')}</tr>`;return;}
+let cells=row.cells,offs=[false,false,false,false];
+if(row.k=="a"){const a=gae(lam);cells=a.map(x=>`<span class="${cls(x)}">${f(x)}</span>`);}
+if(row.k=="ratio"){const rc=ratioCells();cells=rc.map(c=>c.html);offs=rc.map(c=>c.off);}
+const vis=row.k=="p"&&hlCols!=null?hlCols:4;
+h+=`<tr><td class="lab"><b>${row.lab}${row.k=="a"?`(λ=${lam.toFixed(2)})`:""}</b></td><td style="color:#aaa;background:#f6f6f6">${row.k=="v"?'':row.prompt}</td>`+cells.map((c,i)=>i<vis?`<td class="${ri==hlRow?'hl':''} ${offs[i]?'off':''}">${c}</td>`:'<td class="hide">.</td>').join('')+'</tr>';});
+tb.innerHTML=h;
+for(let i=0;i<4;i++)document.getElementById('h'+i).style.opacity=(cur==1&&hlCols!=null&&i>=hlCols)?.25:1;}
+const MODELS=["策略模型(训练中)","对照模型(冻住)","裁判(冻住)","价值模型(训练中)"];
+function setModels(on,tr){models.innerHTML=MODELS.map((m,i)=>`<span class="m ${tr.includes(i)?'tr':on.includes(i)?'on':''}">${m}</span>`).join('');}
+const S=[
+{t:"起点",f(){shown=0;draw();setModels([],[]);exp.innerHTML="手上有 4 个模型:策略模型和对照模型都是 SFT 模型的复制品(一个训练、一个冻住),裁判用偏好数据训练好、冻住,价值模型要一起训练。<br>下面的表,每一列是一个 token,每一行是一步要算的东西。";}},
+{t:"① 生成",f(){shown=1;setModels([0],[]);let k=0;draw(0,0);clearInterval(timer);timer=setInterval(()=>{k++;draw(0,k);if(k>=4)clearInterval(timer);},500);
+exp.innerHTML="策略模型<b>一个 token 一个 token 地采样</b>:先根据\"怎么退款?\"抽出\"您好\",再根据\"怎么退款?您好\"抽出\"亲\"……<br>每一格是它当时写这个 token 的概率,记下来叫 <b>p旧</b>(logp_old)。真实系统里是一批 512 条,每条几百个 token,这张表就是 512 × T。";}},
+{t:"② 对照模型",f(){clearInterval(timer);shown=2;setModels([1],[]);draw(1);exp.innerHTML="把<b>同一串文字</b>喂给冻住的对照模型,一次前向就得到每个位置的概率表,取出实际写的那个 token 的概率。<br>\"亲\"这一格:策略 0.50,对照 0.20,说明训练到现在,模型比原来更爱说\"亲\"。其他 3 个 token 概率没变。";}},
+{t:"③ 绳子",f(){shown=3;setModels([0,1],[]);draw(2);exp.innerHTML="每个 token 单独算:<b>−β × ln(p策略 / p对照)</b>。<br>\"亲\":−0.1 × ln(0.50 / 0.20) = −0.1 × 0.92 = <b>−0.09</b>,扣分。其他 3 个 ln(1) = 0,不扣。<br>(如果某个 token 的概率比原来<b>低</b>,ln 是负数,这里就会变成加分。)";}},
+{t:"④ 裁判",f(){shown=4;setModels([2],[]);draw(3);exp.innerHTML="裁判读完<b>整句</b>\"怎么退款?您好亲点申请退款\",给出一个分 <b>6.0</b>。<br>这个分<b>只放在最后一个 token</b> 上,前面 3 个从裁判那里拿到的都是 0。";}},
+{t:"⑤ 奖励 r",f(){shown=5;setModels([],[]);draw(4);exp.innerHTML="每个 token 的奖励 = 绳子 + 裁判:<b>[0, −0.09, 0, +6.0]</b>。<br>问题来了:前 3 个 token 几乎都是 0,它们到底写得好不好?这要靠价值模型来分。";}},
+{t:"⑥ 价值模型",f(){shown=6;setModels([3],[]);draw(5);exp.innerHTML="价值模型读同一串文字,在<b>每个位置</b>输出一个数:\"写到这里,预计最后能拿几分\"。<br>读完问题时 3.7;写了\"您好\"3.5;写了\"亲\"掉到 <b>1.8</b>(它见过很多回答,知道太客套通常拿不到高分);写了\"点申请\"回到 4.9。写完以后预期 = 0。";}},
+{t:"⑦ 每个 token 的 δ",f(){shown=7;setModels([],[]);draw(6);lamBox.style.display='none';exp.innerHTML="<b>δ = r + 下一个 V − 这个 V</b>,意思是\"这个 token 让预期变了多少\":<br>您好 0 + 3.5 − 3.7 = −0.2 · 亲 −0.09 + 1.8 − 3.5 = <b>−1.79</b> · 点申请 0 + 4.9 − 1.8 = <b>+3.1</b> · 退款 6.0 + 0 − 4.9 = +1.1<br>加起来 2.21 = 总奖励 5.91 − 起点预期 3.7。裁判的一个总分,就这样被分到了每个 token 上。";}},
+{t:"⑧ GAE 优势 A",f(){shown=8;setModels([],[]);lamBox.style.display='block';draw(7);exp.innerHTML="真实 PPO 不直接用 δ,而是用 <b>GAE</b>:A = δ + λ·(下一个 token 的 A)。拖动上面的 λ 看看:<br>λ = 0 时 A 就等于 δ,只看自己;λ = 0.95 时,前面的 token 也要替后面的结果分担一部分,比如\"亲\"后面接了很好的\"点申请\",它的 A 会被拉高。<br>最后整批所有 token 的 A 还要做标准化(减平均、除标准差),所以真正决定推高还是压低的,是它<b>比这批平均好还是差</b>。";}},
+{t:"⑨ 更新 4 轮",f(){shown=9;ep=0;lam=0;document.getElementById('lam').value=0;lamV.textContent='0.00';setModels([],[0,3]);lamBox.style.display='none';draw(8);exp.innerHTML="现在改权重:策略 loss = −平均[min(ratio × A, clip(ratio, 0.8, 1.2) × A)],价值 loss = (V − 目标)²,反向传播,两个模型的<b>全部权重</b>都挪一小步。<br>同一批数据要用 4 轮。为了看得清楚,这里 A 用 λ = 0 的版本(您好、亲为负 → 压低;点申请、退款为正 → 推高)。点\"再更新一轮\",看每个 token 的 ratio(新概率 ÷ 旧概率)怎么变。(ratio 的数字是示意)";extra.innerHTML='<button id="epB" onclick="epoch()">再更新一轮</button>';}},
+{t:"⑩ 扔掉,下一批",f(){ep=4;shown=9;setModels([0],[]);draw(-1);exp.innerHTML="4 轮用完,这批数据<b>整批扔掉</b>。回到 ①,用变好一点点的策略模型重新生成一批,对照模型和裁判始终不变。<br>重复几百到几千轮。每一轮,绳子都会按新的概率重新算,所以模型跑得越远,绳子扣得越多。<br><b>一句话:</b>生成 → 对照模型算概率 → 每个 token 扣绳子,最后一个加裁判分 → 价值模型分功劳 → 按功劳改权重,clip 按 token 限速 → 扔掉,重来。";}}
+];
+function epoch(){if(ep>=4)return;ep++;draw(8);const a=gae(lam);const msgs=RATIO_PATH.map((p,i)=>{const x=p[ep];const off=(a[i]>0&&x>1.2)||(a[i]<0&&x<0.8);return off?`「${TOK[i]}」到顶了,关掉 ✂️`:null}).filter(Boolean);
+exp.innerHTML=`第 ${ep} 轮更新完。`+(msgs.length?msgs.join(';')+'。被关掉的 token,剩下几轮里它那一项梯度是 0,不再推任何权重。':'所有 token 的 ratio 都还在 0.8 ~ 1.2 之间,继续推。')+(ep==4?'<br>4 轮用完了,点\"下一步\"。':'');}
+function go(i){if(i<0||i>=S.length)return;clearInterval(timer);cur=i;extra.innerHTML='';S[i].f();
+bar.innerHTML=S.map((s,j)=>`<span class="${j==i?'on':''}" onclick="go(${j})">${s.t}</span>`).join('');prev.disabled=i==0;next.disabled=i==S.length-1;}
+lam.oninput=()=>{lam=+lam.value;lamV.textContent=lam.toFixed(2);draw(7);};
+go(0);
+</script></body></html>

@@ -44,6 +44,15 @@
 | week8/mla.py | MLA：只存压缩向量 c、吸收技巧验证、各模型 KV cache 账本 |
 | week8/v3.py | DeepSeek-V3：逐矩阵算出 671B 总参数 / 37B 激活 + 部署与训练账 |
 | week8/*.html | 本周交互 demo（MoE 路由、MLA 压缩） |
+| week9/sft.py | SFT：GPT-2 客服微调（特殊 token、label −100、保存 sft_model） |
+| week9/reward.py | 奖励模型：Bradley-Terry loss + 长度偏好被钻空子 |
+| week9/rlhf.py | RLHF 玩具：REINFORCE + KL 绳子，β 扫描 |
+| week9/ppo.py | PPO：clip 限速 + 价值模型分功劳 |
+| week9/ppo_gpt2.py | 手写 PPO 跑真 GPT-2（IMDB 情感奖励） |
+| week9/dpo.py | DPO：拒答训练，纯 DPO 失败 → 加 SFT 项 + "正确 ≻ 拒答"对修复 |
+| week9/grpo.py | GRPO：组内优势 + 规则奖励（准确率 / 格式） |
+| week9/*.html | 本周交互 demo（奖励模型、KL、PPO 逐 token、RLHF 全流程、DPO 修复、R1 流程） |
+| week9/qa-log.md | 本周全部提问与解答 |
 
 ## 运行
 ```bash
