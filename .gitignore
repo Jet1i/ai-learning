@@ -5,3 +5,5 @@ __pycache__/
 .DS_Store
 *.npz
 sft_model/
+shopx_lora/
+shopx_full/

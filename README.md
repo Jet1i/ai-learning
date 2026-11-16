@@ -53,11 +53,15 @@
 | week9/grpo.py | GRPO：组内优势 + 规则奖励（准确率 / 格式） |
 | week9/*.html | 本周交互 demo（奖励模型、KL、PPO 逐 token、RLHF 全流程、DPO 修复、R1 流程） |
 | week9/qa-log.md | 本周全部提问与解答 |
+| week10/lora.py | LoRA 原理：B·A 低秩补丁、B=0 初始化、秩够不够的实验、真实模型参数量 |
+| week10/lora_sft.py | 用 peft 给 ShopX 客服挂 LoRA 学新业务：学习率坑、遗忘与 replay、对比全参 |
+| week10/merge_qlora.py | 合并 LoRA（W + s·B·A）+ 全参 / LoRA / QLoRA 训练显存估算 |
+| week10/qa-log.md | 本周全部提问与解答 |
 
 ## 运行
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install openai mcp numpy torch transformers   # 第 5 周起用到后三个
+pip install openai mcp numpy torch transformers peft   # 第 5 周起用到 torch/transformers,第 10 周用 peft
 export DEEPSEEK_API_KEY="sk-..."   # 不要把 Key 写进代码
 python week1/chat.py
 ```
