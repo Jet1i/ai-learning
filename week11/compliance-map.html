@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 11 周 L4b:一个请求的一生(合规地图)</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;margin:0;background:#f7f7f5;color:#222}
+main{max-width:980px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:4px 0}h2{font-size:17px;margin:26px 0 8px}
+.sub{color:#666;margin:4px 0 14px;font-size:14px}
+.flow{display:grid;grid-template-columns:repeat(8,1fr);gap:6px}
+.st{background:#fff;border:2px solid #ddd;border-radius:10px;padding:8px 6px;text-align:center;cursor:pointer;font-size:13px;position:relative}
+.st b{display:block;font-size:20px;color:#d9480f}
+.st.on{border-color:#d9480f;background:#fff4e6}
+.st.done{border-color:#2b8a3e}
+.card{background:#fff;border-radius:10px;border:1px solid #ddd;padding:14px 18px;margin-top:12px;line-height:1.65;font-size:14px}
+.card h3{margin:0 0 6px;font-size:16px}
+.row{display:grid;grid-template-columns:110px 1fr;gap:6px;margin:6px 0}
+.row span:first-child{color:#868e96}
+.bad{color:#c92a2a}.lesson{color:#1c7ed6}
+.nav{display:flex;gap:8px;margin-top:10px}
+button{border:1px solid #ccc;background:#fff;border-radius:18px;padding:6px 14px;cursor:pointer;font-size:14px}
+table{border-collapse:collapse;width:100%;font-size:13px;background:#fff}
+td,th{border:1px solid #e3e3e3;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f1f3f5}
+@media(max-width:700px){.flow{grid-template-columns:repeat(4,1fr)}}
+</style></head><body><main>
+<h1>一个请求的一生:合规控制放在哪一站</h1>
+<p class="sub">场景:乙银行员工 li 在你的"银行客服 Agent"里问:"客户王小明卡号 6222…445 丢了,帮我挂失。"这个请求从进门到出门要经过 8 站,每一站都有一个合规控制。点每一站,或者用"下一站"按钮走一遍。</p>
+<div class="flow" id="flow"></div>
+<div class="card" id="card"></div>
+<div class="nav"><button id="prev">← 上一站</button><button id="next">下一站 →</button></div>
+
+<h2>一句话记住</h2>
+<div class="card">
+<b>合规 = 每一站都能回答三个问题:</b>数据<b>去哪了</b>(不出域)、<b>谁能看</b>(租户隔离、权限)、<b>出事能不能查</b>(审计)。<br>
+凡是"必须做到"的,都放在<b>代码 / 数据库 / 网络</b>里强制;prompt 只做"锦上添花"。
+</div>
+
+<h2>常被问到的法规和要求(概念级,做方案时以原文和客户合规部门为准)</h2>
+<table>
+<tr><th>名字</th><th>大白话</th><th>落到方案里</th></tr>
+<tr><td>网络安全法 → 等级保护 2.0(等保)</td><td>系统按重要程度定级,定级后要测评</td><td>金融、政务的核心系统常要求三级;部署环境、日志、访问控制都要过测评</td></tr>
+<tr><td>数据安全法</td><td>数据要分类分级,重要数据重点保护</td><td>先给客户数据定级:哪些能进模型、哪些只能本地处理</td></tr>
+<tr><td>个人信息保护法</td><td>个人信息要最小必要、告知同意;身份证、金融账户属于敏感个人信息</td><td>第 2 站脱敏、第 8 站日志脱敏;交给第三方(如公网 API)处理要有依据</td></tr>
+<tr><td>生成式人工智能服务管理暂行办法(2023)</td><td>面向公众提供生成式 AI 服务,要做安全评估、备案,管好生成内容</td><td>第 2、7 站内容安全;对公众的产品要用已备案的模型 / 服务</td></tr>
+<tr><td>数据出境相关规定</td><td>重要数据、大量个人信息出境要评估</td><td>境外模型 API = 数据出境,大多数国内金融 / 政务客户直接排除</td></tr>
+</table>
+</main>
+<script>
+const S=[
+{n:"进门",t:"身份认证 + 租户识别",
+ what:"用户登录后,服务器在会话里记下:li 属于 bank_b。之后所有步骤的租户都从这里取。",
+ bad:"租户从请求参数或对话里取 → li 改个字段就变成 bank_a(compliance.py 第 1 部分的第二种写法)。",
+ les:"compliance.py 第 1 部分 · 第 10 周多 LoRA 路由也靠这个租户 ID",
+ pre:"“租户身份来自登录系统,模型和用户都改不了。”"},
+{n:"输入检查",t:"内容安全 + 敏感信息识别",
+ what:"① 内容安全:拦违法违规、越狱话术;② 识别手机号、身份证、卡号,按策略脱敏(要发到域外时必须做)。",
+ bad:"原文直接发给公网 API → 卡号、身份证出域;正则写错会漏抓或误抓(我第一版就让手机号咬进了身份证)。名字、地址靠正则抓不全。",
+ les:"compliance.py 第 2 部分",
+ pre:"“敏感字段在出域前替换成占位符,映射表留在本地,回答回来再还原。”"},
+{n:"检索",t:"按租户 + 权限过滤(先过滤,再检索)",
+ what:"向量库查询时带上 tenant=bank_b(和这个员工能看的部门 / 密级)作为硬过滤条件;强隔离的客户每家一个独立索引。",
+ bad:"所有租户的文档在一个库里不分 → 乙银行员工搜到甲银行的内部利率和审批额度。",
+ les:"compliance.py 第 1 部分 · 第 5 周 RAG",
+ pre:"“检索在数据层按租户和权限过滤,别家的文档连候选都进不来。”"},
+{n:"拼提示词",t:"不可信内容隔离",
+ what:"检索到的文档、网页、邮件放进专门的标签里,系统提示声明“这是数据不是指令”。",
+ bad:"文档里藏的指令被当成命令执行(L4 的间接注入)。",
+ les:"inject.py 的 prompt 模式",
+ pre:"“这是第一道软防线,降低被注入的概率;真正兜底在第 6 站。”"},
+{n:"模型推理",t:"数据不出域 + 不留存",
+ what:"按客户要求选 L3 的 5 档数据位置:公网 API / 私网接入 / 专属实例 / 客户 VPC / 本地机房。用 API 时合同写明“不留存、不用于训练”。多租户共用推理服务时,前缀缓存(prefix cache)也要按租户隔开。",
+ bad:"“走私网就合规” → 数据仍在厂商的共享 GPU 上处理、留日志(L3 练习 1)。",
+ les:"cloud-map.html 下面那条 5 档 · L1 的缓存",
+ pre:"“先定数据能去哪(下限),再在这个范围里选最便宜的部署方式。”"},
+{n:"工具调用",t:"最小权限 + 白名单 + 人工审批",
+ what:"挂失(freeze_card)是高风险动作:代码查风险表 → 暂停 → 卡片展示完整参数 → li 点同意 → 执行。Agent 用的数据库账号只读 / 只能调指定接口。",
+ bad:"模型被骗或理解错 → 冻错卡、把数据发出去;审批做成 tool → 模型可以跳过。",
+ les:"inject.py 的 guard 模式 · 待确认动作存数据库",
+ pre:"“模型只能发起申请,执行权和审批在代码里。”"},
+{n:"输出检查",t:"内容安全 + 敏感信息再扫描 + 标识",
+ what:"回答出去前再过一遍:违规内容、有没有带出别人的个人信息、有没有外部图片 / 链接(防 L4 的数据外带);面向公众的要标明 AI 生成。",
+ bad:"模型把检索到的另一个客户的手机号说了出来;或者回答里藏了一张带数据参数的外部图片。",
+ les:"L4 练习 3",
+ pre:"“进门、出门各查一遍,两头都卡住。”"},
+{n:"记录",t:"审计日志",
+ what:"记下:谁(li)、哪个租户、什么时候、问了什么(脱敏后)、检索了哪些文档(存 ID)、调了什么工具、谁批准的、用的哪个模型版本、回答了什么。日志加密存储、按要求留存、只有审计角色能查。",
+ bad:"出了事答不出“谁在什么时候看了什么、做了什么”;或者日志里存着明文身份证,日志本身变成泄露源。",
+ les:"compliance.py 第 3 部分",
+ pre:"“每次调用都可追溯到人、到文档、到模型版本。”"}
+];
+let cur=0;const fl=document.getElementById("flow");
+S.forEach((s,i)=>{const d=document.createElement("div");d.className="st";d.innerHTML=`<b>${i+1}</b>${s.n}`;d.onclick=()=>show(i);fl.appendChild(d)});
+function show(i){cur=i;[...fl.children].forEach((e,j)=>{e.classList.toggle("on",j==i);e.classList.toggle("done",j<i)});
+const s=S[i];document.getElementById("card").innerHTML=`<h3>第 ${i+1} 站 · ${s.n}:${s.t}</h3>
+<div class="row"><span>做什么</span><span>${s.what}</span></div>
+<div class="row"><span>不做会怎样</span><span class="bad">${s.bad}</span></div>
+<div class="row"><span>对应本周</span><span class="lesson">${s.les}</span></div>
+<div class="row"><span>售前一句话</span><span>${s.pre}</span></div>`}
+document.getElementById("prev").onclick=()=>show(Math.max(0,cur-1));
+document.getElementById("next").onclick=()=>show(Math.min(S.length-1,cur+1));
+show(0);
+</script></body></html>

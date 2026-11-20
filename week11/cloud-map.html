@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 11 周 L3:云上大模型的 4 层部署地图</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;margin:0;background:#f7f7f5;color:#222}
+main{max-width:980px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:4px 0}h2{font-size:17px;margin:26px 0 8px}
+p.sub{color:#666;margin:4px 0 14px}
+.stack{display:flex;flex-direction:column;gap:8px}
+.layer{display:grid;grid-template-columns:170px 1fr;border-radius:10px;background:#fff;border:2px solid #ddd;cursor:pointer;transition:.2s;overflow:hidden}
+.layer .name{padding:12px;font-weight:600;color:#fff}
+.layer .body{padding:10px 14px;font-size:14px;line-height:1.55}
+.layer.on{border-color:#d9480f;box-shadow:0 0 0 3px #ffd8a8}
+.layer.dim{opacity:.35}
+.bar{display:flex;height:16px;border-radius:4px;overflow:hidden;margin:6px 0 2px;font-size:11px}
+.bar span{display:flex;align-items:center;justify-content:center;color:#fff;white-space:nowrap}
+.you{background:#d9480f}.ven{background:#868e96}
+table{border-collapse:collapse;width:100%;font-size:13px;background:#fff}
+td,th{border:1px solid #e3e3e3;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f1f3f5}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+button{border:1px solid #ccc;background:#fff;border-radius:18px;padding:6px 14px;cursor:pointer;font-size:14px}
+button.on{background:#d9480f;color:#fff;border-color:#d9480f}
+.why{background:#fff4e6;border-left:4px solid #d9480f;padding:10px 14px;border-radius:6px;font-size:14px;line-height:1.6;min-height:40px}
+.lane{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;font-size:13px}
+.lane div{background:#fff;border:1px solid #ddd;border-radius:8px;padding:8px}
+.lane b{display:block;margin-bottom:4px}
+.arrow{font-size:12px;color:#666;display:flex;justify-content:space-between;margin-top:4px}
+</style></head><body><main>
+<h1>云上大模型的 4 层部署地图</h1>
+<p class="sub">越往上,厂商替你管得越多(上线快、按量付费);越往下,你自己管得越多(控制力强、数据更"在自己手里")。点任意一层看细节,或者点下面的客户场景。</p>
+
+<div class="stack" id="stack"></div>
+
+<h2>数据到底在哪?(从左到右,客户的控制力越来越强,成本和工作量也越来越大)</h2>
+<div class="lane">
+<div><b>① 公网 API</b>请求经过公网发到厂商的共享模型服务。最便宜、最快。</div>
+<div><b>② 私网接入</b>同一个厂商服务,但通过专线 / PrivateLink 走内网,不经过公网。模型仍是厂商的、共享的。</div>
+<div><b>③ 专属实例</b>厂商给你独占的 GPU 跑模型(预置吞吐 / 专属部署),别的客户的请求不进你的机器;按时长付费。</div>
+<div><b>④ 客户 VPC 自部署</b>开源模型部署在客户自己云账号的 VPC 里(PaaS 或 GPU 云服务器)。数据不离开客户账号。</div>
+<div><b>⑤ 本地机房</b>私有化 / 一体机,可以完全断网。数据不出客户机房。</div>
+</div>
+<div class="arrow"><span>← 便宜、快、弹性好</span><span>控制力强、合规好、贵、要运维 →</span></div>
+
+<h2>客户场景:该选哪一层?</h2>
+<div class="btns" id="btns"></div>
+<div class="why" id="why">点一个场景。</div>
+
+<h2>4 层对照表</h2>
+<table id="tbl"></table>
+<p class="sub" style="margin-top:10px">产品名只是举例(各家每年都在改名、改形态),做方案时按客户选定的云查最新文档。价格数字沿用 L1/L2 的示例假设。</p>
+</main>
+<script>
+const L=[
+{k:"maas",name:"MaaS<br>模型即服务",color:"#1c7ed6",you:15,
+ desc:"直接调模型 API,按 token 付费。例:阿里云百炼、火山方舟、AWS Bedrock、Azure OpenAI。通常还打包了知识库(RAG)、Agent 搭建、微调、内容安全护栏。",
+ pay:"按 token(L1 的账)","time":"小时~天",manage:"prompt、业务逻辑、评测",data:"发给厂商(① 或 ②;部分支持 ③ 专属)",scale:"厂商自动扩容",fit:"PoC、流量波动大、通用能力够用"},
+{k:"paas",name:"PaaS<br>模型托管平台",color:"#7048e8",you:40,
+ desc:"把你自己的模型(开源底座 + LoRA)上传到平台,平台帮你跑推理框架、扩缩容、监控。例:阿里云 PAI-EAS、火山引擎机器学习平台、AWS SageMaker。",
+ pay:"按实例时长","time":"天~周",manage:"选模型、微调、配置实例、评测",data:"在客户云账号里(④)",scale:"平台按规则扩缩容",fit:"有自己的微调模型、多 LoRA、要在自己账号里"},
+{k:"iaas",name:"IaaS<br>GPU 云服务器",color:"#2b8a3e",you:70,
+ desc:"租 GPU 机器,自己装 vLLM、自己做负载均衡和扩容。就是 L2 算的那本账。例:各家的 GPU 云服务器(A100 / H100 / H200 / L20 等)。",
+ pay:"按卡时(不管用没用)","time":"周",manage:"推理框架、调度、扩容、监控、升级",data:"在客户云账号里(④)",scale:"自己做(可用弹性 / 抢占式实例)",fit:"量大且稳、要极致调优、团队有运维能力"},
+{k:"onprem",name:"私有化<br>本地机房",color:"#495057",you:95,
+ desc:"买 GPU 服务器或大模型一体机放进客户机房,可以断网运行。成本变成一次性采购(按 3~5 年折旧)+ 电费 + 机房 + 运维。",
+ pay:"一次性采购 + 折旧","time":"月(采购、上架)",manage:"全部:硬件、网络、模型、安全",data:"不出机房(⑤)",scale:"几乎没有,按峰值买",fit:"涉密、强监管、内网物理隔离"}
+];
+const S=[
+{t:"初创公司两周出 PoC",hi:["maas"],w:"<b>MaaS 公共 API。</b>量小(每天几千次,L2 表里 API 每月不到 1 千元,自建至少 6.6 万),而且需求还在变,先证明价值。之后量大了再算账迁移。"},
+{t:"电商客服,每天 100 万次,数据可上云",hi:["maas","paas"],w:"<b>先 MaaS + 缓存。</b>L2:DeepSeek API 24 万/月,自建 8B 要 32 万。只有在需要自己的 LoRA(话术 / 品牌)且流量稳定时,才考虑 PaaS 托管开源模型 + multi-LoRA。"},
+{t:"银行:客户数据不能给第三方,但可以放自己的云账号",hi:["paas","iaas"],w:"<b>在客户 VPC 里自部署开源模型(PaaS 或 GPU 云服务器)。</b>数据不离开客户账号(④)。有些监管口径也接受厂商的专属实例 + 私网接入(③),要先和客户的合规部门确认。代价:L2 那样的固定成本和运维。"},
+{t:"涉密单位,内网物理隔离",hi:["onprem"],w:"<b>私有化 / 一体机。</b>网络都不通,只能放机房。这时成本不是重点,重点是按峰值买够卡、做好高可用、规划模型升级(没法随时换新模型)。"},
+{t:"SaaS 公司,50 个租户各有 LoRA",hi:["paas","iaas"],w:"<b>PaaS 或 GPU 云服务器上跑 vLLM multi-LoRA。</b>一份底座 + 50 个补丁、不合并(第 10 周)。MaaS 一般不让你挂 50 个自定义补丁共享一份底座。风险:请求挂错补丁 = 租户数据串了 → L4 租户隔离。"},
+{t:"流量白天高峰、夜里很少,且要私有",hi:["paas","iaas"],w:"<b>混合:</b>基础流量用 VPC 内自部署的固定机器,高峰溢出用弹性 GPU(按需扩容);夜里机器跑批(文档向量化、评测、数据生成),把 L2 里 38% 的利用率提上去。"}
+];
+const st=document.getElementById("stack");
+L.forEach(l=>{const d=document.createElement("div");d.className="layer";d.id="L-"+l.k;
+d.innerHTML=`<div class="name" style="background:${l.color}">${l.name}</div><div class="body">${l.desc}
+<div class="bar"><span class="you" style="width:${l.you}%">你管 ${l.you}%</span><span class="ven" style="width:${100-l.you}%">${l.you<90?"厂商管":""}</span></div></div>`;
+d.onclick=()=>pick(null,[l.k],"<b>"+l.name.replace("<br>"," ")+"</b>:付费 "+l.pay+";上线 "+l.time+";适合:"+l.fit+"。");st.appendChild(d)});
+const bt=document.getElementById("btns");
+S.forEach((s,i)=>{const b=document.createElement("button");b.textContent=s.t;b.onclick=()=>pick(b,s.hi,s.w);bt.appendChild(b)});
+function pick(btn,hi,w){document.querySelectorAll("button").forEach(x=>x.classList.remove("on"));if(btn)btn.classList.add("on");
+L.forEach(l=>{const e=document.getElementById("L-"+l.k);e.classList.toggle("on",hi.includes(l.k));e.classList.toggle("dim",!hi.includes(l.k))});
+document.getElementById("why").innerHTML=w}
+const rows=[["","付费方式","pay"],["","上线时间","time"],["","你要管","manage"],["","数据在哪","data"],["","弹性","scale"],["","适合","fit"]];
+let h="<tr><th></th>"+L.map(l=>`<th>${l.name.replace("<br>"," ")}</th>`).join("")+"</tr>";
+rows.forEach(r=>{h+=`<tr><th>${r[1]}</th>`+L.map(l=>`<td>${l[r[2]]}</td>`).join("")+"</tr>"});
+document.getElementById("tbl").innerHTML=h;
+</script></body></html>

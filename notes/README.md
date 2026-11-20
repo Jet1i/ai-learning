@@ -14,6 +14,7 @@
 | 8 | MoE（路由器、负载均衡偏置、DeepSeekMoE）、MLA（压缩 KV + 吸收技巧 + 解耦 RoPE）、DeepSeek-V3 参数与部署账 | [week08](week08-moe-mla-deepseek.md) | 约 3.0/5 | 数字算到底（128K=131072、int4=0.5 字节）、MoE 省算力不省显存、权重 vs KV cache、售前回答带数字 |
 | 9 | SFT、奖励模型、RLHF/PPO（KL 绳子、GAE、clip）、DPO（失败与修复）、GRPO、DeepSeek-R1 与蒸馏 | [week09](week09-rlhf-dpo-grpo-r1.md) | 约 2.7/5 | 答题写机制不只写结论、训练谁冻结谁、DPO loss 低 ≠ 行为对（看生成指标）、GRPO 组平均是基线不是逐 token 功劳、显存别忘梯度和 Adam |
 | 10 | LoRA 原理与实操（学习率、遗忘与 replay）、合并、QLoRA 显存、Prompt / RAG / 微调选型 | [week10](week10-lora-selection.md) | 约 2.8/5 | 冻住 W 也会遗忘（补丁对所有输入生效）、LoRA 快不了几百倍但省显存、量化 ≠ 低秩、判断瓶颈要控制变量、选型写理由和风险 |
+| 11 | TCO（API vs 自建）、GPU 选型、云上 4 层、Prompt 注入与代码护栏、租户隔离/脱敏/审计、项目 2 方案书 | [week11](week11-tco-security.md) | 约 1.7/5 | 写依据和数字、prefill 看算力、私有化按峰值买、自建便宜要说跟谁比、三要素漏不可信内容 |
 
 ## 每篇笔记的固定结构
 一句话总结 → 核心概念 → 关键代码 → 实验结果 → 我的提问与解答 → 易错点 → 复习题

@@ -57,6 +57,13 @@
 | week10/lora_sft.py | 用 peft 给 ShopX 客服挂 LoRA 学新业务：学习率坑、遗忘与 replay、对比全参 |
 | week10/merge_qlora.py | 合并 LoRA（W + s·B·A）+ 全参 / LoRA / QLoRA 训练显存估算 |
 | week10/qa-log.md | 本周全部提问与解答 |
+| week11/tco_api.py | API 账单：缓存命中 / 未命中 / 输出三种价、前缀缓存、多轮对话的真实成本 |
+| week11/tco_gpu.py | 自建 GPU 成本：屋顶线算单卡容量、真实流量峰值 + 高可用、和 API 的盈亏平衡表 |
+| week11/cloud-map.html | 云上 AI 4 层地图（MaaS / PaaS / IaaS / 私有化）+ 数据位置 5 档 + 场景选型 |
+| week11/inject.py | 间接 Prompt 注入：天真 Agent vs 提示词防御 vs 代码护栏（MODEL=fake 演示被骗的模型） |
+| week11/compliance.py | 多租户 RAG 隔离、正则脱敏（数字边界）、审计日志 |
+| week11/compliance-map.html | 合规 8 站地图 + 法规速查 |
+| week11/qa-log.md | 本周全部提问与解答 |
 
 ## 运行
 ```bash
