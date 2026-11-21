@@ -64,6 +64,12 @@
 | week11/compliance.py | 多租户 RAG 隔离、正则脱敏（数字边界）、审计日志 |
 | week11/compliance-map.html | 合规 8 站地图 + 法规速查 |
 | week11/qa-log.md | 本周全部提问与解答 |
+| week12/vlm1.py | 图片怎么变成 token：切块 + wx+b、位置编码、真实分辨率的 token 数 |
+| week12/clip1.py | 真 CLIP：图文相似度，英文 vs 中文描述（故意失败）、logit_scale ×100 |
+| week12/multi_agent.py | 多 Agent：单 Agent vs 路由（两个坑）vs 编排者，调用次数对比（MODEL=fake 可离线） |
+| week12/monitor.py | 上线监控：平均 vs P95/P99、总体 vs 分类别、灰度回滚、黄金测试集回归 |
+| week12/bank-agent-demo.html | 银行智能客服 Agent 可点击演示（4 个场景，客户话说明每一步） |
+| week12/qa-log.md | 本周全部提问与解答 |
 
 ## 运行
 ```bash
